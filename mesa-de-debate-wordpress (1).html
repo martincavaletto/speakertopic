@@ -1,0 +1,864 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>html{color-scheme:light}body{margin:0}img{max-width:100%}[hidden]{display:none!important}</style>
+<title>Mesa de Debate</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=Figtree:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap">
+<style>
+/* Layout: cabecera + pestañas; la mesa hexagonal manda en la vista Mesa, con la consola de turno al costado. */
+:root{
+  --bg:#F1EEEF; --surface:#FFFFFF; --surface-2:#F7F4F5; --ink:#201B1E; --muted:#675F63; --line:#DCD6D9;
+  --felt:#C23742; --felt-hi:#DE5159; --rim:#8F5A55; --on-felt:#FFFFFF; --seat:#847D81;
+  --accent:#C23742; --accent-ink:#FFFFFF; --mine:#1F5FA8; --for:#157356; --against:#A94A12;
+  --note-bg:#FFF2D9; --note-ink:#5E3D00; --focus:#1F5FA8;
+  --font-display:'Bricolage Grotesque','Segoe UI',system-ui,sans-serif;
+  --font-body:'Figtree','Segoe UI',system-ui,sans-serif;
+  --font-mono:'IBM Plex Mono',ui-monospace,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#171216; --surface:#221C21; --surface-2:#2B242A; --ink:#F2EDF0; --muted:#AFA5AB; --line:#3C343B;
+    --felt:#A9303B; --felt-hi:#C84650; --rim:#6D4640; --seat:#9C939A;
+    --accent:#E5636B; --accent-ink:#1A1215; --mine:#7AAEF2; --for:#4CC59B; --against:#F09A5B;
+    --note-bg:#3A2D12; --note-ink:#F4D58A; --focus:#7AAEF2; color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#171216; --surface:#221C21; --surface-2:#2B242A; --ink:#F2EDF0; --muted:#AFA5AB; --line:#3C343B;
+  --felt:#A9303B; --felt-hi:#C84650; --rim:#6D4640; --seat:#9C939A;
+  --accent:#E5636B; --accent-ink:#1A1215; --mine:#7AAEF2; --for:#4CC59B; --against:#F09A5B;
+  --note-bg:#3A2D12; --note-ink:#F4D58A; --focus:#7AAEF2; color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--font-body);font-size:15px;line-height:1.5;
+  padding-block:0 56px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.wrap{max-width:1180px;margin:0 auto}
+h1,h2,h3,h4{font-family:var(--font-display);text-wrap:balance;margin:0}
+p{margin:0}
+:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+button,input,select,textarea{font:inherit;color:inherit}
+
+/* Cabecera */
+.top{display:flex;flex-wrap:wrap;align-items:center;gap:14px 28px;padding-block:20px 12px}
+.brand{display:flex;align-items:center;gap:12px}
+.brand h1{font-size:30px;line-height:1;font-weight:700;letter-spacing:-.02em}
+.brand small{display:block;color:var(--muted);font-size:12.5px;margin-top:3px}
+.me{margin-left:auto;width:230px;min-width:0}
+.me-top{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.lvl{font:600 12px var(--font-body);letter-spacing:.06em;text-transform:uppercase;color:var(--accent)}
+.me-name{font-weight:600}
+.pts{margin-left:auto;font:600 13px var(--font-mono);font-variant-numeric:tabular-nums}
+.meter{height:6px;background:var(--line);border-radius:3px;margin-top:6px;overflow:hidden}
+.meter i{display:block;height:100%;background:var(--accent);border-radius:3px;transition:width .4s}
+.me-next{font-size:12px;color:var(--muted);margin-top:4px}
+nav.tabs{display:flex;gap:2px;overflow-x:auto;border-bottom:1px solid var(--line);margin-bottom:24px}
+nav.tabs a{padding:10px 14px;text-decoration:none;color:var(--muted);font-weight:600;white-space:nowrap;border-bottom:3px solid transparent;margin-bottom:-1px}
+nav.tabs a:hover{color:var(--ink)}
+nav.tabs a[aria-current="page"]{color:var(--ink);border-bottom-color:var(--accent)}
+
+/* Piezas comunes */
+.view-head{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px 24px;margin-bottom:20px}
+.view-head h2{font-size:28px;font-weight:700;letter-spacing:-.015em}
+.view-head p{color:var(--muted);max-width:62ch;margin-top:4px}
+.head-actions{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end}
+.head-actions label{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--muted);font-weight:600;min-width:0}
+.head-actions select{max-width:340px}
+.btn{font-weight:600;font-size:14px;padding:9px 15px;border-radius:7px;border:1px solid var(--accent);background:var(--accent);color:var(--accent-ink);cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:7px;line-height:1.2}
+.btn.ghost{background:transparent;color:var(--ink);border-color:var(--line)}
+.btn.ghost:hover:not(:disabled){border-color:var(--muted)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn:hover:not(:disabled){filter:brightness(1.06)}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:16px}
+input[type=text],input[type=url],input[type=number],select,textarea{background:var(--surface);border:1px solid var(--line);border-radius:7px;padding:8px 10px;width:100%;min-width:0}
+textarea{resize:vertical;line-height:1.5}
+textarea:disabled{background:var(--surface-2);color:var(--muted)}
+.chip{display:inline-block;font-size:12px;font-weight:600;padding:2px 9px;border-radius:99px;border:1px solid var(--line);color:var(--muted)}
+.tag{font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);border:1px solid var(--line);padding:1px 7px;border-radius:4px}
+.note{background:var(--note-bg);color:var(--note-ink);border-radius:8px;padding:10px 12px;font-size:13.5px}
+.empty{color:var(--muted);font-size:14px;padding:14px 2px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.av{display:inline-grid;place-items:center;width:30px;height:30px;border-radius:50%;border:2px solid var(--seat);font:600 13px var(--font-display);flex:none;background:var(--surface)}
+
+/* Noticias */
+.news-layout{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:28px;align-items:start}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}
+.chips button{border:1px solid var(--line);background:transparent;border-radius:99px;padding:5px 13px;font-weight:600;font-size:13.5px;cursor:pointer;color:var(--muted)}
+.chips button[aria-pressed="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+#feed{display:flex;flex-direction:column;gap:14px}
+.news{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:18px 20px;display:flex;flex-direction:column;gap:8px}
+.news-top{display:flex;gap:10px;align-items:center}
+.topic{font:700 12px var(--font-body);letter-spacing:.07em;text-transform:uppercase;color:var(--accent)}
+.news h3{font-size:21px;line-height:1.2;font-weight:650;letter-spacing:-.01em}
+.news p{color:var(--muted);max-width:68ch}
+.news-meta{display:flex;flex-wrap:wrap;gap:4px 18px;font-size:13px;color:var(--muted)}
+.news-meta b{font-family:var(--font-mono);font-weight:600;color:var(--ink);font-variant-numeric:tabular-nums}
+.news-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:6px}
+#post-form{display:flex;flex-direction:column;gap:12px;position:sticky;top:12px}
+#post-form h3{font-size:19px}
+#post-form label{display:flex;flex-direction:column;gap:4px;font-size:13px;font-weight:600}
+.hint{font-size:12.5px;color:var(--muted);font-weight:400}
+.form-msg{font-size:13.5px;min-height:1.4em}
+.form-msg.ok{color:var(--for)} .form-msg.bad{color:var(--against)}
+
+/* Mesa */
+.mesa-grid{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);gap:28px;align-items:start}
+.table-wrap svg{display:block;width:100%;max-width:640px;height:auto;margin:0 auto;overflow:visible}
+.rim{stroke:var(--rim);stroke-width:12;stroke-linejoin:round}
+.on-felt{fill:var(--on-felt);text-anchor:middle}
+.wave{fill:none;stroke:rgba(0,0,0,.16);stroke-width:9;stroke-linecap:round}
+.talking .wave{animation:wv 1.3s ease-in-out infinite}
+.talking .wave:nth-of-type(2n){animation-delay:.2s}
+@keyframes wv{50%{opacity:.35}}
+.seat .body{fill:var(--surface);stroke:var(--seat);stroke-width:3}
+.seat.me .body{stroke:var(--mine);stroke-width:4}
+.seat.speaking .body{stroke:var(--ink);stroke-width:5}
+.seat.out .body,.seat.empty .body{stroke-dasharray:5 5}
+.seat.out,.seat.empty{opacity:.55}
+.seat .ini{font:600 18px var(--font-display);fill:var(--ink);text-anchor:middle;dominant-baseline:central}
+.seat .nm{font:600 13px var(--font-body);fill:var(--ink);text-anchor:middle;paint-order:stroke;stroke:var(--bg);stroke-width:4px;stroke-linejoin:round}
+.pulse{fill:none;stroke:var(--ink);stroke-width:2;opacity:0;transform-box:fill-box;transform-origin:center;animation:pulse 1.6s ease-out infinite}
+@keyframes pulse{0%{transform:scale(1);opacity:.5}100%{transform:scale(1.55);opacity:0}}
+.roster{margin-top:18px}
+.roster h3{font-size:17px;margin-bottom:8px}
+.roster ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.roster li{display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--line)}
+.roster li.out{opacity:.55}
+.roster .who{display:flex;flex-direction:column;min-width:0;flex:1}
+.roster .who span{font-size:12.5px;color:var(--muted)}
+.roster .you{font-style:normal;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--mine);margin-left:4px}
+.votes{font:600 13px var(--font-mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+.votes .f{color:var(--for)} .votes .a{color:var(--against)}
+.mini{font-size:12.5px;font-weight:600;padding:4px 10px;border-radius:6px;border:1px solid var(--line);background:transparent;cursor:pointer;white-space:nowrap}
+.mini[aria-pressed="true"]{background:var(--against);border-color:var(--against);color:var(--surface)}
+.composer{display:flex;flex-direction:column;gap:10px}
+.composer.active{border-color:var(--accent)}
+.turn-info{font:650 18px var(--font-display);line-height:1.25}
+.cd-row{display:flex;align-items:baseline;gap:10px}
+.cd{font:600 30px var(--font-mono);font-variant-numeric:tabular-nums;min-width:3.2ch}
+.cd-cap{color:var(--muted);font-size:13.5px}
+.bar{height:6px;background:var(--line);border-radius:3px;overflow:hidden}
+.bar i{display:block;height:100%;width:0;background:var(--ink);transition:width .25s linear}
+.bar[data-low="1"] i{background:var(--against)}
+.comp-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.wc{font:500 13px var(--font-mono);color:var(--muted);font-variant-numeric:tabular-nums}
+.log{display:flex;flex-direction:column;gap:10px;margin-top:16px;max-height:620px;overflow-y:auto;padding-right:2px}
+.op{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:8px}
+.op.mine{border-color:var(--mine)}
+.op header{display:flex;align-items:center;gap:9px}
+.op .meta{font-size:12.5px;color:var(--muted)}
+.op p{max-width:70ch}
+.vote-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.vote{font-size:13px;font-weight:600;border:1px solid var(--line);background:transparent;border-radius:6px;padding:4px 11px;cursor:pointer;display:inline-flex;gap:7px}
+.vote b{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+.vote.f[aria-pressed="true"]{background:var(--for);border-color:var(--for);color:var(--surface)}
+.vote.a[aria-pressed="true"]{background:var(--against);border-color:var(--against);color:var(--surface)}
+.vote:disabled{opacity:.5;cursor:default}
+.sys{font-size:13px;color:var(--muted);text-align:center;padding:2px 8px}
+.sys.golpe{color:var(--against);font-weight:700}
+#mesa-result{margin-top:22px}
+.result h3{font-size:24px;margin-bottom:4px}
+.result table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px}
+.result th,.result td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}
+.result th{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+.result tr.me td{font-weight:700}
+.result .tw{overflow-x:auto}
+.result-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:10px}
+
+/* Reglas */
+.stack{display:flex;flex-direction:column;gap:16px;max-width:760px}
+.stack ul{margin:6px 0 0;padding-left:20px;display:flex;flex-direction:column;gap:5px}
+.stack h3{font-size:19px;margin-bottom:2px}
+.rules-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:20px;align-items:start}
+.rules-grid h3{font-size:19px;margin-bottom:10px}
+.field{display:grid;grid-template-columns:minmax(0,1fr) 120px;gap:10px;align-items:center;padding:7px 0;border-top:1px solid var(--line);font-size:14px}
+.field small{display:block;color:var(--muted);font-size:12px}
+.field.chk{grid-template-columns:minmax(0,1fr) auto}
+.field input[type=checkbox]{width:20px;height:20px}
+.field.sel{grid-template-columns:1fr}
+.rate{margin-top:12px}
+footer.fine{margin-top:36px;font-size:12.5px;color:var(--muted);max-width:80ch}
+
+/* Cuenta, modo voz y lenguaje no permitido */
+.acct{display:flex;align-items:center;gap:4px 8px;flex-wrap:wrap;font-size:13px;margin-bottom:10px}
+.acct b{font-weight:700}
+.link{background:none;border:0;padding:0;color:var(--accent);font-weight:600;cursor:pointer;text-decoration:underline;font-size:13px}
+.modal{position:fixed;inset:0;background:rgba(10,6,9,.55);display:grid;place-items:center;padding:max(16px,env(safe-area-inset-top,0px)) max(16px,env(safe-area-inset-right,0px)) max(16px,env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px));z-index:30;overflow-y:auto}
+.modal-card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:22px;width:100%;max-width:420px;display:flex;flex-direction:column;gap:12px}
+.modal-card h3{font-size:22px}
+.modal-card label{display:flex;flex-direction:column;gap:4px;font-size:13px;font-weight:600}
+.modal-card form{display:flex;flex-direction:column;gap:10px}
+.wide{width:100%;justify-content:center}
+.or{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:12.5px}
+.or::before,.or::after{content:"";flex:1;height:1px;background:var(--line)}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;align-self:flex-start}
+.seg button{border:0;background:transparent;padding:6px 16px;font-weight:600;font-size:13.5px;cursor:pointer;color:var(--muted)}
+.seg button[aria-pressed="true"]{background:var(--ink);color:var(--bg)}
+.tbox{display:flex;flex-direction:column;gap:8px}
+.warn{font-size:13px;color:var(--against);font-weight:600;min-height:1.3em}
+.voice{display:flex;flex-direction:column;gap:10px;padding:14px;border:1px dashed var(--line);border-radius:8px}
+.rec-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.bars{display:inline-flex;gap:3px;align-items:center;height:22px}
+.bars i{width:3px;height:6px;background:var(--muted);border-radius:2px}
+.rec-on .bars i{background:var(--accent);animation:bars .9s ease-in-out infinite}
+.rec-on .bars i:nth-child(2n){animation-delay:.15s}
+.rec-on .bars i:nth-child(3n){animation-delay:.3s}
+@keyframes bars{50%{height:20px}}
+.audio{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted);border:1px solid var(--line);border-radius:99px;padding:3px 11px;align-self:flex-start}
+.op.flag{border-color:var(--against)}
+.flagtag{font-size:11.5px;font-weight:700;color:var(--against);text-transform:uppercase;letter-spacing:.05em}
+@media (prefers-reduced-motion:reduce){.rec-on .bars i{animation:none}}
+
+#toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(20px + env(safe-area-inset-bottom,0px));background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:8px;font-weight:600;font-size:14px;max-width:min(92vw,520px);text-align:center;z-index:20}
+
+@media (max-width:900px){
+  .news-layout,.mesa-grid{grid-template-columns:minmax(0,1fr)}
+  #post-form{position:static}
+  .me{margin-left:0;width:100%}
+}
+@media (max-width:640px){
+  .view-head h2{font-size:24px}
+}
+@media (prefers-reduced-motion:reduce){
+  .pulse,.talking .wave{animation:none}
+  .meter i,.bar i{transition:none}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <svg width="40" height="40" viewBox="0 0 40 40" aria-hidden="true"><polygon points="20,3 35,11.5 35,28.5 20,37 5,28.5 5,11.5" fill="var(--felt)" stroke="var(--rim)" stroke-width="3" stroke-linejoin="round"/></svg>
+      <div><h1>Mesa</h1><small>Debatí la noticia como en una mesa de café</small></div>
+    </div>
+    <div class="me" id="me" aria-live="polite"></div>
+  </header>
+  <nav class="tabs" id="nav" aria-label="Secciones">
+    <a href="#noticias" data-v="noticias">Noticias</a>
+    <a href="#mesa" data-v="mesa">Mesa</a>
+    <a href="#reglas" data-v="reglas">Reglas del prototipo</a>
+  </nav>
+
+  <!-- NOTICIAS -->
+  <section id="v-noticias">
+    <div class="view-head"><div><h2>Noticias para discutir</h2><p>Publicá el titular y el copete de una nota de cualquier portal, con el link a la nota completa. Ubicala en la temática que corresponda.</p></div></div>
+    <div class="news-layout">
+      <div>
+        <div class="chips" id="chips" role="group" aria-label="Filtrar por temática"></div>
+        <div id="feed"></div>
+      </div>
+      <form id="post-form" class="panel" novalidate>
+        <h3>Publicar una noticia</h3>
+        <label for="pf-title">Titular<input type="text" id="pf-title" maxlength="160" placeholder="Copiá el titular tal como lo publica el portal"></label>
+        <label for="pf-lede">Copete<textarea id="pf-lede" rows="4" maxlength="400" placeholder="La bajada o copete de la nota"></textarea></label>
+        <label for="pf-url">Link a la nota completa<input type="url" id="pf-url" placeholder="https://"></label>
+        <label for="pf-topic">Temática<select id="pf-topic"></select></label>
+        <div class="form-msg" id="pf-msg" role="status"></div>
+        <button class="btn" type="submit">Publicar</button>
+        <p class="hint" id="quota"></p>
+      </form>
+    </div>
+  </section>
+
+  <!-- MESA -->
+  <section id="v-mesa" hidden>
+    <div class="view-head">
+      <div><h2>Mesa de debate</h2><p id="mesa-sub">Elegí una noticia y sentate. Hablan por turnos, el público vota cada opinión y la mesa puede expulsar a quien se salga del tema.</p></div>
+      <div class="head-actions">
+        <label for="mesa-news">Noticia<select id="mesa-news"></select></label>
+        <button class="btn" id="mesa-btn" data-act="mesa-start">Sentarme a la mesa</button>
+      </div>
+    </div>
+    <div class="mesa-grid">
+      <div>
+        <div class="table-wrap"><svg id="tbl" viewBox="0 0 640 640" role="img" aria-label="Mesa de debate con sus asientos"></svg></div>
+        <div class="roster" id="roster"></div>
+      </div>
+      <div>
+        <div class="panel" id="m-host"></div>
+        <div class="log" id="log" aria-label="Opiniones de la mesa"></div>
+      </div>
+    </div>
+    <div id="mesa-result" aria-live="polite"></div>
+  </section>
+
+  <!-- REGLAS -->
+  <section id="v-reglas" hidden>
+    <div class="view-head"><div><h2>Reglas del prototipo</h2><p>Todos los números del planteo están acá. Cambialos y probá la mesa de nuevo; los cambios se aplican a la próxima partida.</p></div></div>
+    <div class="rules-grid" id="rules"></div>
+    <div class="note rate" id="rate-note"></div>
+    <div class="rules-grid" style="margin-top:22px">
+      <div class="panel stack"><h3>Para decidir juntos</h3>
+        <ul>
+          <li><b>Texto o voz.</b> Se puede participar de las dos formas. Hablando, 92 palabras en 40 segundos es un ritmo normal; escribiendo, no.</li>
+          <li><b>Votos en contra.</b> Ahora se muestran pero no restan puntos. Se puede cambiar arriba.</li>
+          <li><b>Malas palabras.</b> Se tapan con asteriscos, restan puntos y, al llegar al límite de avisos, sacan de la mesa. Un filtro de lista no detecta insultos escritos con trucos; con usuarios reales conviene sumar reportes.</li>
+          <li><b>Voz.</b> Se convierte a texto en el navegador y los demás leen la transcripción. Si la vista bloquea el micrófono, queda el dictado simulado.</li>
+        </ul>
+      </div>
+      <div class="panel stack"><h3>Para probar rápido</h3>
+        <p class="hint">Subí de nivel para publicar más noticias sin jugar varias mesas, o empezá de cero.</p>
+        <div class="result-actions"><button class="btn" data-act="demo-level">Saltar al nivel 3</button><button class="btn ghost" data-act="demo-reset">Reiniciar progreso</button><button class="btn ghost" data-act="rules-default">Volver a los valores del planteo</button></div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="fine">Prototipo. Los demás disertantes y el público son simulados, las noticias marcadas como ejemplo son inventadas y nada se guarda en un servidor. El contador de visitas de cada noticia cuenta los clics hechos desde esta página; con usuarios reales, el link debe pasar primero por tu servidor.</footer>
+</div>
+<div id="toast" role="status" hidden></div>
+<div id="auth" class="modal" hidden><div class="modal-card" id="auth-card" role="dialog" aria-modal="true" aria-labelledby="auth-t"></div></div>
+
+<script>
+(function(){
+'use strict';
+var $=function(s,r){return (r||document).querySelector(s);};
+var $$=function(s,r){return Array.prototype.slice.call((r||document).querySelectorAll(s));};
+var esc=function(s){return String(s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});};
+var rnd=function(a,b){return a+Math.random()*(b-a);};
+var pick=function(a){return a[Math.floor(Math.random()*a.length)];};
+var shuffle=function(a){a=a.slice();for(var i=a.length-1;i>0;i--){var j=Math.floor(Math.random()*(i+1));var t=a[i];a[i]=a[j];a[j]=t;}return a;};
+var now=function(){return Date.now();};
+var clamp=function(v,a,b){return Math.min(b,Math.max(a,v));};
+var wc=function(t){return (t.match(/\S+/g)||[]).length;};
+var lcFirst=function(s){return s.charAt(0).toLowerCase()+s.slice(1);};
+function clampWords(t,max){var re=/\S+/g,m,c=0;while((m=re.exec(t))){c++;if(c===max){var cut=m.index+m[0].length;return re.test(t)?t.slice(0,cut):t;}}return t;}
+
+/* ---------- Estado y reglas ---------- */
+var DEFAULTS={seats:6,maxWords:92,startSec:15,endSec:40,turns:2,audience:24,expel:'majority',againstSubtracts:false,badPenalty:10,badStrikes:2,badWords:'hdp, hijo de puta, la puta madre, la concha, mierda, pelotudo, pelotuda, forro, forra, idiota, estúpido, imbécil, puta, puto'};
+var S=Object.assign({},DEFAULTS);
+var ME={points:0,posted:0};
+var ACC=null;
+var KEY='mesa-de-debate-prototipo';
+function load(){try{var j=JSON.parse(localStorage.getItem(KEY)||'null');if(j){ME.points=+j.points||0;if(j.acc&&j.acc.name)ACC={name:String(j.acc.name).slice(0,20),provider:String(j.acc.provider||'email')};if(j.S)Object.keys(DEFAULTS).forEach(function(k){if(k in j.S&&typeof j.S[k]===typeof DEFAULTS[k])S[k]=j.S[k];});}}catch(e){}}
+function save(){try{localStorage.setItem(KEY,JSON.stringify({points:ME.points,S:S,acc:ACC}));}catch(e){}}
+var LEVELS=[{n:1,name:'Parroquiano',min:0},{n:2,name:'Habitué',min:40},{n:3,name:'Tertuliano',min:120},{n:4,name:'Orador',min:260},{n:5,name:'Maestro de mesa',min:500}];
+function levelOf(p){var l=LEVELS[0];LEVELS.forEach(function(x){if(p>=x.min)l=x;});return l;}
+function acctHTML(){
+  return ACC?'<div class="acct"><b>'+esc(ACC.name)+'</b><span class="hint">con '+esc(ACC.provider)+'</span><button class="link" data-act="logout">Salir</button></div>'
+    :'<div class="acct"><button class="btn" data-act="auth-open">Registrarme</button><span class="hint">Gratis, con Google, Facebook o email</span></div>';
+}
+function renderMe(){
+  var L=levelOf(ME.points),next=LEVELS.filter(function(x){return x.min>ME.points;})[0];
+  var pct=next?(ME.points-L.min)/(next.min-L.min)*100:100;
+  $('#me').innerHTML=acctHTML()+'<div class="me-top"><span class="lvl">Nivel '+L.n+'</span><span class="me-name">'+L.name+'</span><span class="pts">'+ME.points+' pts</span></div>'+
+    '<div class="meter" role="img" aria-label="Avance hacia el próximo nivel"><i style="width:'+pct.toFixed(0)+'%"></i></div>'+
+    '<div class="me-next">'+(next?'Faltan '+(next.min-ME.points)+' pts para el nivel '+next.n:'Nivel máximo')+'</div>';
+  renderQuota();renderMesaHead();
+}
+var toastT;
+function toast(msg){var t=$('#toast');t.textContent=msg;t.hidden=false;clearTimeout(toastT);toastT=setTimeout(function(){t.hidden=true;},4200);}
+
+/* ---------- Datos de ejemplo ---------- */
+var uid=100;
+var TOPICS=['Política','Deportes','Espectáculos','Economía','Tecnología','Sociedad'];
+var NEWS=[
+ {id:1,topic:'Política',title:'El Congreso empieza a tratar un nuevo régimen de incentivos para pymes',lede:'Legisladores de distintos bloques discuten reducir cargas a las empresas chicas a cambio de metas de empleo. Hay apoyos y críticas por el costo fiscal.',url:'https://example.com/politica/regimen-pymes',author:'Lucía',visits:128},
+ {id:2,topic:'Deportes',title:'Polémica por el cambio de formato del torneo local',lede:'Clubes y dirigentes se enfrentan por la propuesta de sumar una fase de playoffs. Los hinchas dividen opiniones en las redes.',url:'https://example.com/deportes/nuevo-formato',author:'Mateo',visits:342},
+ {id:3,topic:'Espectáculos',title:'Una serie nacional estrena su tercera temporada y divide a la crítica',lede:'Mientras algunos celebran el giro de la historia, otros señalan que perdió el ritmo de las primeras entregas.',url:'https://example.com/espectaculos/tercera-temporada',author:'Camila',visits:91},
+ {id:4,topic:'Economía',title:'Los alquileres vuelven al centro de la discusión',lede:'Inquilinos e inmobiliarias presentan cifras opuestas sobre el efecto de las últimas medidas en los contratos.',url:'https://example.com/economia/alquileres',author:'Joaquín',visits:207},
+ {id:5,topic:'Tecnología',title:'Las escuelas evalúan permitir el uso de inteligencia artificial en las tareas',lede:'Docentes y familias debaten si herramientas de este tipo ayudan a aprender o reemplazan el esfuerzo del alumno.',url:'https://example.com/tecnologia/ia-escuelas',author:'Valentina',visits:156},
+ {id:6,topic:'Sociedad',title:'Proponen prohibir los celulares dentro del aula en todo el país',lede:'El proyecto busca mejorar la atención en clase. Estudiantes y especialistas ofrecen miradas distintas.',url:'https://example.com/sociedad/celulares-aula',author:'Tomás',visits:264}
+].map(function(n){n.example=true;return n;});
+var BOT_NAMES=['Lucía','Mateo','Camila','Joaquín','Valentina','Tomás','Sofía','Bruno','Agustina','Facundo','Julieta','Nicolás'];
+var OPEN_PRO=['Estoy a favor, y te explico por qué.','A mí me parece que esto va en la dirección correcta.','Lo veo positivo y tengo razones concretas.','Desde mi punto de vista, es una buena señal.'];
+var OPEN_CON=['No coincido con lo que plantea la nota.','Me parece que acá se mira solo una parte del problema.','Discrepo, y lo digo con argumentos.','Lo veo con preocupación, y te cuento por qué.'];
+var REASON_PRO=['Los datos que cita la nota muestran un cambio que venía haciendo falta.','Medidas parecidas en otros casos dieron resultados razonables.','El beneficio lo van a notar las personas comunes, no solo los especialistas.','Es mejor intentar algo y corregirlo en el camino que seguir sin hacer nada.'];
+var REASON_CON=['El titular simplifica algo que tiene muchos matices y consecuencias.','Antes de festejar falta saber quién paga el costo y quién se beneficia de verdad.','Casos anteriores parecidos terminaron generando más problemas que soluciones.','Faltan datos concretos y la nota se queda en la superficie.'];
+var CLOSE=['Por eso creo que vale la pena discutirlo con calma.','Me gustaría saber qué opinan los demás sobre este punto.','Ese es mi argumento, ahora los escucho.','Si alguien tiene un dato que me haga cambiar de idea, lo leo.'];
+var OFF=['Che, ¿alguien sabe dónde conseguir entradas baratas para el recital del finde? Les paso mi contacto.','Pasen por mi canal, tengo descuentos en zapatillas, escríbanme al privado.','Esto me hace acordar a que ayer se me rompió el auto, qué día, no saben lo que fue.'];
+function botText(news,lean,prev){
+  var pro=lean==='pro',parts=[];
+  if(prev&&Math.random()<0.45)parts.push(prev+', te contesto.');
+  parts.push(pick(pro?OPEN_PRO:OPEN_CON));
+  var rs=shuffle(pro?REASON_PRO:REASON_CON);
+  parts.push(pick(['En un tema de '+news.topic.toLowerCase()+' como este,','Mirando el caso con calma,','Más allá del titular,'])+' '+lcFirst(rs[0]));
+  parts.push(rs[1]);
+  parts.push(pick(CLOSE));
+  return clampWords(parts.join(' '),S.maxWords);
+}
+function newsById(id){for(var i=0;i<NEWS.length;i++)if(NEWS[i].id===id)return NEWS[i];return NEWS[0];}
+function host(u){try{return new URL(u).hostname.replace(/^www\./,'');}catch(e){return u;}}
+
+/* ---------- Navegación ---------- */
+var VIEWS=['noticias','mesa','reglas'];
+function show(v){
+  if(VIEWS.indexOf(v)<0)v='noticias';
+  VIEWS.forEach(function(x){
+    $('#v-'+x).hidden=(x!==v);
+    var a=$('#nav a[data-v="'+x+'"]');
+    if(x===v)a.setAttribute('aria-current','page');else a.removeAttribute('aria-current');
+  });
+  if(v==='mesa')updateMesaLive();
+  if(v==='reglas')renderRateNote();
+}
+window.addEventListener('hashchange',function(){show(location.hash.slice(1));});
+function go(v){if(location.hash.slice(1)===v)show(v);else location.hash=v;}
+
+/* ---------- Noticias ---------- */
+var filter='Todas';
+function renderChips(){
+  $('#chips').innerHTML=['Todas'].concat(TOPICS).map(function(t){return '<button type="button" data-act="filter" data-t="'+t+'" aria-pressed="'+(t===filter)+'">'+t+'</button>';}).join('');
+}
+function renderFeed(){
+  var list=NEWS.filter(function(n){return filter==='Todas'||n.topic===filter;});
+  $('#feed').innerHTML=list.length?list.map(function(n){
+    return '<article class="news"><div class="news-top"><span class="topic">'+esc(n.topic)+'</span>'+(n.example?'<span class="tag">Ejemplo</span>':'')+'</div>'+
+    '<h3>'+esc(n.title)+'</h3><p>'+esc(n.lede)+'</p>'+
+    '<div class="news-meta"><span>'+esc(host(n.url))+'</span><span>Publicó '+esc(n.author)+'</span><span><b id="vis-'+n.id+'">'+n.visits+'</b> visitas desde Mesa</span></div>'+
+    '<div class="news-actions"><a class="btn ghost" href="'+esc(n.url)+'" target="_blank" rel="noopener noreferrer" data-act="visit" data-id="'+n.id+'">Leer la nota completa <svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3h7v7M13 3 5 11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></a>'+
+    '<button class="btn" data-act="debate" data-id="'+n.id+'">Debatir en una mesa</button></div></article>';
+  }).join(''):'<p class="empty">Todavía no hay noticias en esta temática.</p>';
+}
+function renderQuota(){
+  var allowed=levelOf(ME.points).n+1;
+  $('#quota').textContent='Publicaciones de esta sesión: '+ME.posted+' de '+allowed+'. Cada nivel suma una más.';
+}
+function renderMesaSelect(){
+  $('#mesa-news').innerHTML=NEWS.map(function(n){return '<option value="'+n.id+'">'+esc(n.topic)+' · '+esc(n.title)+'</option>';}).join('');
+  $('#mesa-news').value=String(selNews);
+}
+function pfMsg(t,ok){var m=$('#pf-msg');m.textContent=t;m.className='form-msg '+(ok?'ok':'bad');}
+$('#post-form').addEventListener('submit',function(ev){
+  ev.preventDefault();
+  if(!ACC)return openAuth('post');
+  var allowed=levelOf(ME.points).n+1;
+  var title=$('#pf-title').value.trim(),lede=$('#pf-lede').value.trim(),url=$('#pf-url').value.trim(),topic=$('#pf-topic').value;
+  if(ME.posted>=allowed)return pfMsg('Llegaste al límite de tu nivel. Debatí para subir y publicar más.');
+  if(title.length<8)return pfMsg('Pegá el titular completo de la nota.');
+  if(lede.length<20)return pfMsg('Agregá el copete de la nota.');
+  var ok=false;try{ok=/^https?:$/.test(new URL(url).protocol);}catch(e){}
+  if(!ok)return pfMsg('El link tiene que empezar con http:// o https://');
+  NEWS.unshift({id:++uid,topic:topic,title:title,lede:lede,url:url,author:'Vos',visits:0});
+  ME.posted++;this.reset();renderFeed();renderQuota();renderMesaSelect();pfMsg('Publicada. Ya podés abrir una mesa con ella.',true);
+});
+
+/* ---------- Composer compartido ---------- */
+function composerHTML(p,extra){
+  return '<div class="composer" id="'+p+'-comp"><div class="turn-info" id="'+p+'-info" aria-live="polite"></div>'+
+  '<div class="cd-row"><span class="cd" id="'+p+'-cd">--</span><span class="cd-cap" id="'+p+'-cap"></span></div>'+
+  '<div class="bar"><i id="'+p+'-bar"></i></div>'+
+  '<div class="seg" role="group" aria-label="Cómo participar"><button type="button" data-act="mode" data-p="'+p+'" data-mode="texto" aria-pressed="true">Escribir</button><button type="button" data-act="mode" data-p="'+p+'" data-mode="voz" aria-pressed="false">Hablar</button></div>'+
+  '<div class="voice" id="'+p+'-voice" hidden><div class="rec-row"><button type="button" class="btn" id="'+p+'-rec" data-act="rec" data-p="'+p+'" disabled>Grabar</button><button type="button" class="btn ghost" id="'+p+'-sim" data-act="sim" data-p="'+p+'" disabled>Simular dictado</button><span class="bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span></div><p class="hint" id="'+p+'-vnote"></p></div>'+
+  '<label class="sr" for="'+p+'-msg">Tu opinión</label>'+
+  '<textarea id="'+p+'-msg" rows="5" placeholder="Escribí tu opinión cuando sea tu turno" disabled></textarea>'+
+  '<div class="warn" id="'+p+'-warn" role="status"></div>'+
+  '<div class="comp-foot"><span class="wc" id="'+p+'-wc">0 / 92</span><span>'+(extra||'')+'<button class="btn" id="'+p+'-send" data-act="send" data-p="'+p+'" disabled>Enviar opinión</button></span></div></div>';
+}
+function updateWc(p){
+  var v=$('#'+p+'-msg').value;
+  $('#'+p+'-wc').textContent=wc(v)+' / '+S.maxWords;
+  var w=$('#'+p+'-warn');if(w)w.textContent=findBad(v).length?'Hay lenguaje no permitido. Si lo enviás, se tapa y se penaliza ('+S.badPenalty+' puntos).':'';
+}
+function setComposer(p,st){
+  var msg=$('#'+p+'-msg'),can=!!st.mine&&(st.phase==='wait'||st.phase==='write');
+  if(msg.disabled===can)msg.disabled=!can;
+  $('#'+p+'-send').disabled=!can;
+  $$('#'+p+'-voice button').forEach(function(b){b.disabled=!can;});
+  if(!can&&REC[p])stopRec(p);
+  $('#'+p+'-info').textContent=st.info||'';
+  $('#'+p+'-cd').textContent=st.cd||'--';
+  $('#'+p+'-cap').textContent=st.cap||'';
+  var bar=$('#'+p+'-bar');bar.style.width=(st.pct||0).toFixed(1)+'%';bar.parentNode.setAttribute('data-low',st.low?'1':'0');
+  $('#'+p+'-comp').classList.toggle('active',can);
+}
+function remInfo(deadline,total){var rem=Math.max(0,(deadline-now())/1000);return {rem:rem,cd:Math.ceil(rem)+' s',pct:total?rem/total*100:0,low:rem<=5};}
+
+/* ---------- Registro, lenguaje y voz ---------- */
+var authNext=null;
+function openAuth(next){
+  authNext=next||null;
+  $('#auth-card').innerHTML='<h3 id="auth-t">Registrate para participar</h3><p class="hint">Hace falta una cuenta para publicar noticias y sentarte en una mesa.</p>'+
+  '<form id="auth-form" novalidate><label for="au-name">Nombre en la mesa<input type="text" id="au-name" maxlength="20" placeholder="Cómo querés que te vean"></label>'+
+  '<button type="button" class="btn ghost wide" data-act="auth-provider" data-p="Google">Continuar con Google</button>'+
+  '<button type="button" class="btn ghost wide" data-act="auth-provider" data-p="Facebook">Continuar con Facebook</button>'+
+  '<div class="or">o con email</div>'+
+  '<label for="au-mail">Email<input type="text" id="au-mail" inputmode="email" autocomplete="email" placeholder="nombre@correo.com"></label>'+
+  '<div class="warn" id="au-msg" role="status"></div><button class="btn wide" type="submit">Registrarme con email</button></form>'+
+  '<p class="hint">Prototipo: Google y Facebook están simulados y no usan ninguna cuenta real. Para que funcionen hace falta un servidor y dar de alta la app en cada uno.</p>'+
+  '<button class="link" data-act="auth-close" type="button">Cancelar</button>';
+  $('#auth').hidden=false;setTimeout(function(){var i=$('#au-name');if(i)i.focus();},30);
+}
+function closeAuth(){$('#auth').hidden=true;authNext=null;}
+function doLogin(provider){
+  var name=$('#au-name').value.trim(),msg=$('#au-msg');
+  if(name.length<2){msg.textContent='Escribí el nombre con el que querés aparecer.';$('#au-name').focus();return;}
+  if(findBad(name).length){msg.textContent='Ese nombre no está permitido.';$('#au-name').focus();return;}
+  if(provider==='email'&&!/^\S+@\S+\.\S+$/.test($('#au-mail').value.trim())){msg.textContent='Revisá el email: falta algo, por ejemplo la @.';$('#au-mail').focus();return;}
+  ACC={name:name,provider:provider==='email'?'email':provider};save();
+  var next=authNext;closeAuth();renderMe();toast('Listo, '+name+'. Ya estás registrado.');
+  if(next==='mesa')startDebate();
+}
+function normT(s){return String(s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9]+/g,' ').trim();}
+function badList(){return S.badWords.split(',').map(normT).filter(Boolean);}
+function findBad(text){var t=' '+normT(text)+' ',out=[];badList().forEach(function(w){if(t.indexOf(' '+w+' ')>=0)out.push(w);});return out;}
+var ACCENT={a:'[aáàâä]',e:'[eéèêë]',i:'[iíìîï]',o:'[oóòôö]',u:'[uúùûü]',n:'[nñ]'};
+function maskBad(text){
+  badList().forEach(function(w){
+    var parts=w.split(' ').map(function(p){return p.split('').map(function(c){return ACCENT[c]||c;}).join('');});
+    var re;try{re=new RegExp('(?<![\\p{L}\\p{N}])'+parts.join('[^\\p{L}\\p{N}]+')+'(?![\\p{L}\\p{N}])','giu');}catch(e){return;}
+    text=text.replace(re,function(m){return m.replace(/[\p{L}\p{N}]/gu,'*');});
+  });
+  return text;
+}
+var VM={m:'texto'},REC={m:null},SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+function vnote(p,t){var n=$('#'+p+'-vnote');if(n)n.textContent=t;}
+function setMode(p,mode){
+  VM[p]=mode;stopRec(p);
+  $$('[data-act="mode"][data-p="'+p+'"]').forEach(function(b){b.setAttribute('aria-pressed',String(b.getAttribute('data-mode')===mode));});
+  $('#'+p+'-voice').hidden=(mode!=='voz');
+  if(mode==='voz')vnote(p,SR?'Apretá Grabar y hablá. Tu voz se convierte en texto y los demás leen la transcripción.':'Este navegador no convierte voz en texto. Usá Simular dictado para ver cómo se vería.');
+}
+function stopRec(p){
+  var r=REC[p];REC[p]=null;if(r){try{r.stop();}catch(e){}}
+  var c=$('#'+p+'-comp');if(c)c.classList.remove('rec-on');
+  var b=$('#'+p+'-rec');if(b)b.textContent='Grabar';
+}
+function toggleRec(p){
+  if(REC[p])return stopRec(p);
+  if(!SR)return vnote(p,'Este navegador no convierte voz en texto. Usá Simular dictado.');
+  var msg=$('#'+p+'-msg'),base=msg.value.trim()?msg.value.trim()+' ':'',r;
+  try{r=new SR();}catch(e){return vnote(p,'No se pudo iniciar el micrófono. Probá con Simular dictado.');}
+  r.lang='es-AR';r.continuous=true;r.interimResults=true;
+  r.onresult=function(ev){var t='';for(var i=0;i<ev.results.length;i++)t+=ev.results[i][0].transcript;msg.value=clampWords(base+t,S.maxWords);updateWc(p);onTyping(p);};
+  r.onerror=function(ev){if(REC[p]!==r)return;stopRec(p);vnote(p,(ev.error==='not-allowed'||ev.error==='service-not-allowed')?'El micrófono está bloqueado en esta vista. Probá con Simular dictado.':'No se pudo grabar ('+ev.error+'). Probá con Simular dictado.');};
+  r.onend=function(){if(REC[p]===r)stopRec(p);};
+  try{r.start();REC[p]=r;$('#'+p+'-comp').classList.add('rec-on');$('#'+p+'-rec').textContent='Detener';vnote(p,'Grabando…');}
+  catch(e){REC[p]=null;vnote(p,'No se pudo iniciar el micrófono. Probá con Simular dictado.');}
+}
+function simDictate(p){
+  var msg=$('#'+p+'-msg');if(msg.disabled)return;
+  var n=(D&&D.news)||NEWS[0];
+  msg.value=botText(n,Math.random()<0.5?'pro':'con',null);updateWc(p);onTyping(p);
+  vnote(p,'Dictado simulado: el texto es de ejemplo. Podés editarlo antes de enviar.');
+}
+function audioLabel(e){var s=Math.max(3,Math.round(e.words/2.3));return 'Audio · 0:'+String(s).padStart(2,'0')+' · con transcripción';}
+function extras(e){return (e.audio?'<span class="audio">'+audioLabel(e)+'</span>':'')+(e.flag?'<span class="flagtag">Lenguaje no permitido · se tapó</span>':'');}
+
+/* ---------- MESA ---------- */
+var D=null,selNews=1;
+function mkSeat(k,name,bot){return {k:k,name:name,bot:bot,level:bot?1+Math.floor(Math.random()*4):levelOf(ME.points).n,active:true,turns:0,expel:new Set(),lean:Math.random()<0.5?'pro':'con'};}
+function startDebate(){
+  if(!ACC)return openAuth('mesa');
+  var n=clamp(S.seats,3,8),names=shuffle(BOT_NAMES),meK=Math.round(n/4),seats=[],b=0;
+  for(var k=0;k<n;k++)seats.push(k===meK?mkSeat(k,ACC?ACC.name:'Vos',false):mkSeat(k,names[b++],true));
+  D={news:newsById(selNews),seats:seats,me:meK,round:0,queue:[],cur:null,phase:'idle',deadline:0,total:0,nextAt:0,plan:null,log:[],votes:[],finished:false};
+  $('#mesa-result').innerHTML='';
+  $('#m-msg').value='';updateWc('m');
+  nextTurn();renderMesaAll();
+}
+function renderMesaAll(){renderMesaHead();renderTable();renderRoster();renderLog();updateMesaLive();}
+function renderMesaHead(){
+  var b=$('#mesa-btn'),run=D&&!D.finished;
+  b.textContent=run?'Terminar la mesa':(ACC?'Sentarme a la mesa':'Registrarme para sentarme');b.setAttribute('data-act',run?'mesa-end':'mesa-start');
+  $('#mesa-news').disabled=!!run;
+  $('#mesa-sub').textContent=D?('Se debate: '+D.news.title):'Elegí una noticia y sentate. Hablan por turnos, el público vota cada opinión y la mesa puede expulsar a quien se salga del tema.';
+}
+function prevAuthor(){for(var i=D.log.length-1;i>=0;i--){var e=D.log[i];if(!e.sys&&e.seat!==D.cur)return D.seats[e.seat].name;}return null;}
+function nextTurn(){
+  while(true){
+    var act=D.seats.filter(function(s){return s.active;});
+    if(act.length<2)return finishDebate('Quedaron menos de dos disertantes en la mesa.');
+    while(D.queue.length){var id=D.queue.shift();if(D.seats[id].active)return beginTurn(id);}
+    D.round++;if(D.round>S.turns)return finishDebate();
+    D.queue=act.map(function(s){return s.k;});
+  }
+}
+function beginTurn(id){
+  var s=D.seats[id];D.cur=id;D.phase='wait';D.deadline=now()+S.startSec*1000;D.total=S.startSec;
+  if(s.bot){
+    var miss=Math.random()<0.07,slow=Math.random()<0.05,off=Math.random()<0.08;
+    D.plan={startAt:now()+(miss?(S.startSec+2)*1000:rnd(1500,Math.max(2500,Math.min(6500,S.startSec*700)))),write:slow?(S.endSec+3)*1000:rnd(7000,Math.max(8000,Math.min(24000,S.endSec*600))),sendAt:0,off:off,text:off?pick(OFF):botText(D.news,s.lean,prevAuthor())};
+  }else{D.plan=null;var m=$('#m-msg');m.value='';updateWc('m');setTimeout(function(){if(!m.disabled)m.focus();},60);}
+  renderTable();renderRoster();
+}
+function tally(k){var f=0,a=0;D.log.forEach(function(e){if(!e.sys&&e.seat===k){f+=e.fav;a+=e.against;}});return {f:f,a:a};}
+function requiredExpel(k){
+  var v=D.seats.filter(function(s){return s.active&&s.k!==k;}).length;if(v<1)return 1;
+  if(S.expel==='one')return 1;
+  if(S.expel==='twothirds')return Math.ceil(v*2/3);
+  return Math.floor(v/2)+1;
+}
+function sysLog(t,cls){D.log.push({sys:true,text:t,cls:cls||''});renderLog();}
+function expelSeat(s,reason){
+  if(!s.active)return;
+  s.active=false;sysLog(s.name+' salió de la mesa: '+reason+'.');
+  if(D.phase!=='between'&&s.k===D.cur){D.phase='between';D.nextAt=now()+1200;}
+  renderTable();renderRoster();updateMesaLive();
+}
+function checkExpel(k){var s=D.seats[k];if(s.active&&s.expel.size>=requiredExpel(k))expelSeat(s,'la mesa votó su expulsión');}
+function castExpel(by,k){var a=D.seats[by],s=D.seats[k];if(!a.active||!s.active)return;s.expel.add(by);checkExpel(k);renderRoster();}
+function postEntry(s,text,off,x){
+  var e={id:++uid,seat:s.k,text:text,words:wc(text),fav:0,against:0,my:null,flag:!!(x&&x.flag),audio:!!(x&&x.audio)};
+  D.log.push(e);s.turns++;
+  var q=(off||e.flag)?0.08:(s.k===D.me?0.45+Math.min(e.words,60)/60*0.3+Math.random()*0.15:0.35+Math.random()*0.5);
+  var others=D.seats.filter(function(x){return x.active&&x.bot&&x.k!==s.k;});
+  var voters=S.audience+others.length;
+  for(var i=0;i<voters;i++)if(Math.random()<0.62)D.votes.push({at:now()+rnd(800,13000),id:e.id,dir:Math.random()<q?'f':'a'});
+  if(off)others.forEach(function(x){if(Math.random()<0.75)D.votes.push({at:now()+rnd(1500,8000),expel:s.k,by:x.k});});
+  D.phase='between';D.nextAt=now()+1800;
+  if(s.k===D.me){$('#m-msg').value='';updateWc('m');}
+  renderLog();renderTable();renderRoster();
+}
+function applyVote(v){
+  var e=D.log.filter(function(x){return x.id===v.id;})[0];if(!e)return;
+  if(v.dir==='f')e.fav++;else e.against++;paintVotes(e);
+}
+function processVotes(t){
+  if(!D.votes.length)return;
+  var due=[],rest=[];D.votes.forEach(function(v){(v.at<=t?due:rest).push(v);});D.votes=rest;
+  var changed=false;
+  due.forEach(function(v){if(v.expel!=null)castExpel(v.by,v.expel);else{applyVote(v);changed=true;}});
+  if(changed)renderRoster();
+}
+function paintVotes(e){
+  var f=$('#vf-'+e.id),a=$('#va-'+e.id);if(f)f.textContent=e.fav;if(a)a.textContent=e.against;
+  $$('[data-act="vote"][data-id="'+e.id+'"]').forEach(function(b){b.setAttribute('aria-pressed',String(e.my===b.getAttribute('data-dir')));});
+}
+function userVote(id,dir){
+  var e=D&&D.log.filter(function(x){return x.id===id;})[0];if(!e||e.seat===D.me)return;
+  if(e.my==='f')e.fav--;if(e.my==='a')e.against--;
+  if(e.my===dir)e.my=null;else{e.my=dir;if(dir==='f')e.fav++;else e.against++;}
+  paintVotes(e);renderRoster();
+}
+function toggleExpel(k){
+  if(!D||D.finished||k===D.me||!D.seats[D.me].active)return;
+  var s=D.seats[k];if(!s.active)return;
+  if(s.expel.has(D.me))s.expel.delete(D.me);else s.expel.add(D.me);
+  renderRoster();checkExpel(k);
+}
+function rejoin(){
+  if(!D||D.finished)return;var s=D.seats[D.me];if(s.active)return;
+  s.active=true;s.expel.clear();D.queue.push(D.me);sysLog('Volviste a sentarte a la mesa.');
+  renderTable();renderRoster();updateMesaLive();
+}
+function onTyping(p){
+  if(p==='m'&&D&&!D.finished&&D.cur===D.me&&D.phase==='wait'&&$('#m-msg').value.trim()){D.phase='write';D.deadline=now()+S.endSec*1000;D.total=S.endSec;renderTable();}
+}
+function sendMsg(p){
+  var raw=$('#'+p+'-msg').value.trim();if(!raw)return;
+  var bad=findBad(raw).length>0,text=bad?maskBad(raw):raw,audio=VM[p]==='voz';
+  stopRec(p);
+  if(p==='m'){
+    if(!(D&&!D.finished&&D.cur===D.me&&(D.phase==='wait'||D.phase==='write')))return;
+    var me=D.seats[D.me];
+    postEntry(me,text,false,{flag:bad,audio:audio});
+    if(bad){
+      var lost=Math.min(ME.points,S.badPenalty);ME.points-=lost;save();renderMe();
+      me.strikes=(me.strikes||0)+1;
+      sysLog('Lenguaje no permitido de '+me.name+': '+S.badPenalty+' puntos menos (aviso '+me.strikes+' de '+S.badStrikes+').','golpe');
+      toast('Lenguaje no permitido: se tapó tu texto y se restaron '+lost+' puntos.');
+      if(me.strikes>=S.badStrikes)expelSeat(me,'acumuló '+S.badStrikes+' avisos por lenguaje no permitido');
+    }
+  }
+}
+function debateTick(){
+  if(!D||D.finished)return;
+  var t=now();processVotes(t);if(D.finished)return;
+  if(D.phase==='wait'||D.phase==='write'){
+    var s=D.seats[D.cur];
+    if(t>=D.deadline){expelSeat(s,D.phase==='wait'?'no empezó a hablar en '+S.startSec+' s':'no terminó su opinión en '+S.endSec+' s');return;}
+    if(s.bot){
+      if(D.phase==='wait'&&t>=D.plan.startAt){D.phase='write';D.deadline=t+S.endSec*1000;D.total=S.endSec;D.plan.sendAt=t+D.plan.write;renderTable();}
+      else if(D.phase==='write'&&t>=D.plan.sendAt){postEntry(s,D.plan.text,D.plan.off);return;}
+    }
+  }else if(D.phase==='between'&&t>=D.nextAt){nextTurn();if(D&&!D.finished)return;}
+  updateMesaLive();
+}
+function updateMesaLive(){
+  var nm=$('#ctr-name'),tm=$('#ctr-time'),cp=$('#ctr-cap'),svg=$('#tbl');
+  if(!D){
+    setComposer('m',{mine:false,phase:'idle',info:'Elegí una noticia y sentate a la mesa para empezar.',cap:'Hasta '+S.maxWords+' palabras por turno'});
+    if(nm){nm.textContent='Mesa libre';tm.textContent='';cp.textContent='Elegí una noticia';}return;
+  }
+  if(D.finished){
+    setComposer('m',{mine:false,phase:'idle',info:'La mesa terminó. Los resultados están más abajo.'});
+    if(nm){nm.textContent='Fin del debate';tm.textContent='';cp.textContent='';}$('#m-rejoin').hidden=true;return;
+  }
+  var me=D.seats[D.me],s=D.seats[D.cur],mine=D.cur===D.me,ph=D.phase;
+  $('#m-rejoin').hidden=me.active;
+  if(svg)svg.classList.toggle('talking',ph==='write');
+  if(ph==='between'){
+    var who=D.log.length&&!D.log[D.log.length-1].sys?D.seats[D.log[D.log.length-1].seat].name:s.name;
+    setComposer('m',{mine:false,phase:'between',info:me.active?'Se vota la opinión de '+who+'.':'Saliste de la mesa. Podés seguir mirando y votando.',cap:''});
+    if(nm){nm.textContent=who;tm.textContent='···';cp.textContent='votando';}return;
+  }
+  var ri=remInfo(D.deadline,D.total);
+  var info,cap;
+  if(!me.active){info='Saliste de la mesa. Podés seguir mirando y votando.';cap='Habla '+s.name;}
+  else if(mine){info='Es tu turno';cap=ph==='wait'?'para empezar a escribir':'para terminar tu opinión';}
+  else{
+    var pos=D.queue.indexOf(D.me)+1;
+    info='Habla '+s.name+'. '+(pos===1?'Sos el próximo.':pos>1?'Tu turno llega en '+pos+' turnos.':'Ya hablaste en esta ronda.');
+    cap=ph==='wait'?s.name+' está por empezar':s.name+' está escribiendo';
+  }
+  setComposer('m',{mine:mine&&me.active,phase:ph,info:info,cd:ri.cd,cap:cap,pct:ri.pct,low:ri.low});
+  if(nm){nm.textContent=s.name;tm.textContent=String(Math.ceil(ri.rem));cp.textContent=ph==='wait'?'para empezar':'para terminar';}
+}
+function finishDebate(note){
+  if(D.finished)return;
+  D.votes.filter(function(v){return v.expel==null;}).forEach(applyVote);D.votes=[];
+  D.finished=true;D.phase='done';
+  var me=D.seats[D.me],t=tally(D.me),gain=0,before=levelOf(ME.points);
+  if(me.turns>0){gain=Math.max(0,5*me.turns+t.f-(S.againstSubtracts?t.a:0));}
+  ME.points+=gain;save();renderMe();
+  var after=levelOf(ME.points);
+  renderMesaAll();renderMesaResult(note,gain,t);
+  if(after.n>before.n)toast('Subiste al nivel '+after.n+': '+after.name+'. Ya podés publicar una noticia más.');
+}
+function renderMesaResult(note,gain,t){
+  var rows=D.seats.map(function(s){var x=tally(s.k);return {s:s,f:x.f,a:x.a,net:x.f-x.a};}).sort(function(x,y){return y.net-x.net||y.f-x.f;});
+  var top=rows.filter(function(r){return r.s.turns>0;})[0],me=D.seats[D.me];
+  var pts=me.turns>0?'Sumaste <b>'+gain+' puntos</b>: 5 por cada turno ('+me.turns+')'+' más '+t.f+' votos a favor'+(S.againstSubtracts?', menos '+t.a+' en contra':'. Tus '+t.a+' votos en contra no restan puntos')+'.':'No llegaste a opinar, así que esta mesa no suma puntos.';
+  var lv=levelOf(ME.points);
+  $('#mesa-result').innerHTML='<div class="panel result"><h3>'+(top?'Mejor argumento: '+esc(top.s.name)+' ('+(top.net>0?'+':'')+top.net+')':'Nadie alcanzó a opinar')+'</h3>'+
+  '<p class="hint">'+esc(note||'Se completaron los '+S.turns+' turnos por disertante.')+'</p>'+
+  '<div class="tw"><table><thead><tr><th>Disertante</th><th>Turnos</th><th>A favor</th><th>En contra</th><th>Neto</th><th>Estado</th></tr></thead><tbody>'+
+  rows.map(function(r){return '<tr class="'+(r.s.k===D.me?'me':'')+'"><td>'+esc(r.s.name)+'</td><td>'+r.s.turns+'</td><td>+'+r.f+'</td><td>−'+r.a+'</td><td>'+(r.net>0?'+':'')+r.net+'</td><td>'+(r.s.active?'En la mesa':'Expulsado o fuera')+'</td></tr>';}).join('')+
+  '</tbody></table></div><p>'+pts+' Ahora estás en el nivel '+lv.n+' ('+lv.name+') con '+ME.points+' puntos.</p>'+
+  '<div class="result-actions"><button class="btn" data-act="mesa-start">Otra mesa</button><button class="btn ghost" data-act="go" data-v="noticias">Ver más noticias</button></div></div>';
+}
+/* mesa: dibujo */
+function renderTable(){
+  var svg=$('#tbl'),n=D?D.seats.length:clamp(S.seats,3,8),cx=320,cy=320,R0=200,A=R0*Math.cos(Math.PI/n),SD=A+52,SR=36,meK=D?D.me:Math.round(n/4);
+  var poly=[];for(var k=0;k<n;k++){var a=k*2*Math.PI/n+Math.PI/n;poly.push((cx+R0*Math.cos(a)).toFixed(1)+','+(cy+R0*Math.sin(a)).toFixed(1));}
+  var h='<defs><radialGradient id="felt" cx="50%" cy="50%" r="60%"><stop offset="0" stop-color="var(--felt-hi)"/><stop offset="1" stop-color="var(--felt)"/></radialGradient></defs>';
+  h+='<polygon class="rim" points="'+poly.join(' ')+'" fill="url(#felt)"/>';
+  if(n>=5){
+    [0,1,2].forEach(function(i){var o=86+i*22,hh=56+i*22;
+      h+='<path class="wave" d="M '+(cx-o)+' '+(cy-hh)+' Q '+(cx-o-hh*0.55)+' '+cy+' '+(cx-o)+' '+(cy+hh)+'"/>';
+      h+='<path class="wave" d="M '+(cx+o)+' '+(cy-hh)+' Q '+(cx+o+hh*0.55)+' '+cy+' '+(cx+o)+' '+(cy+hh)+'"/>';});
+  }
+  h+='<circle cx="'+cx+'" cy="'+cy+'" r="68" fill="rgba(255,255,255,.13)"/>';
+  h+='<text class="on-felt" id="ctr-name" x="'+cx+'" y="'+(cy-24)+'" font-family="var(--font-display)" font-weight="600" font-size="17"></text>';
+  h+='<text class="on-felt" id="ctr-time" x="'+cx+'" y="'+(cy+16)+'" font-family="var(--font-mono)" font-weight="600" font-size="38"></text>';
+  h+='<text class="on-felt" id="ctr-cap" x="'+cx+'" y="'+(cy+40)+'" font-family="var(--font-body)" font-size="13"></text>';
+  for(var i=0;i<n;i++){
+    var ang=i*2*Math.PI/n,x=cx+SD*Math.cos(ang),y=cy+SD*Math.sin(ang),s=D?D.seats[i]:null;
+    var speaking=D&&!D.finished&&D.cur===i&&(D.phase==='wait'||D.phase==='write');
+    var cls='seat'+(speaking?' speaking':'')+(s&&!s.active?' out':'')+(i===meK?' me':'')+(!s&&i!==meK?' empty':'');
+    var name=s?s.name:(i===meK?'Vos':'Libre'),ini=s?s.name.charAt(0):(i===meK?'V':'');
+    var ly=Math.sin(ang)<-0.55?y-SR-10:y+SR+20;
+    h+='<g class="'+cls+'"><title>'+esc(name)+'</title>'+(speaking?'<circle class="pulse" cx="'+x.toFixed(1)+'" cy="'+y.toFixed(1)+'" r="'+SR+'"/>':'')+
+       '<circle class="body" cx="'+x.toFixed(1)+'" cy="'+y.toFixed(1)+'" r="'+SR+'"/><text class="ini" x="'+x.toFixed(1)+'" y="'+y.toFixed(1)+'">'+esc(ini)+'</text>'+
+       '<text class="nm" x="'+x.toFixed(1)+'" y="'+ly.toFixed(1)+'">'+esc(name)+'</text></g>';
+  }
+  svg.innerHTML=h;
+}
+function renderRoster(){
+  var el=$('#roster');if(!D){el.innerHTML='';return;}
+  var af=document.activeElement,fk=af&&af.getAttribute&&af.getAttribute('data-act')==='expel'?af.getAttribute('data-k'):null;
+  el.innerHTML='<h3>En la mesa</h3><ul>'+D.seats.map(function(s){
+    var t=tally(s.k),can=s.k!==D.me&&s.active&&D.seats[D.me].active&&!D.finished;
+    return '<li class="'+(s.active?'':'out')+'"><span class="av">'+esc(s.name.charAt(0))+'</span><div class="who"><b>'+esc(s.name)+(s.k===D.me?'<i class="you">vos</i>':'')+'</b><span>Nivel '+s.level+' · '+s.turns+(s.turns===1?' turno':' turnos')+'</span></div>'+
+      '<span class="votes" title="Votos a favor y en contra"><span class="f">+'+t.f+'</span> <span class="a">−'+t.a+'</span></span>'+
+      (can?'<button class="mini" data-act="expel" data-k="'+s.k+'" aria-pressed="'+s.expel.has(D.me)+'" title="Pedir que se lo expulse de la mesa">Expulsar '+s.expel.size+'/'+requiredExpel(s.k)+'</button>':(!s.active?'<span class="chip">Fuera</span>':''))+'</li>';
+  }).join('')+'</ul>';
+  if(fk){var b=el.querySelector('[data-act="expel"][data-k="'+fk+'"]');if(b)b.focus();}
+}
+function entryHTML(e){
+  if(e.sys)return '<div class="sys '+(e.cls||'')+'">'+esc(e.text)+'</div>';
+  var s=D.seats[e.seat],mine=e.seat===D.me;
+  return '<article class="op'+(mine?' mine':'')+(e.flag?' flag':'')+'"><header><span class="av">'+esc(s.name.charAt(0))+'</span><b>'+esc(s.name)+(mine?' <span class="meta">(vos)</span>':'')+'</b><span class="meta">'+e.words+' palabras</span></header><p>'+esc(e.text)+'</p>'+extras(e)+
+    '<div class="vote-row"><button class="vote f" data-act="vote" data-id="'+e.id+'" data-dir="f" aria-pressed="'+(e.my==='f')+'"'+(mine?' disabled':'')+'>A favor <b id="vf-'+e.id+'">'+e.fav+'</b></button>'+
+    '<button class="vote a" data-act="vote" data-id="'+e.id+'" data-dir="a" aria-pressed="'+(e.my==='a')+'"'+(mine?' disabled':'')+'>En contra <b id="va-'+e.id+'">'+e.against+'</b></button></div></article>';
+}
+function renderLog(){
+  var el=$('#log');
+  if(!D){el.innerHTML='<p class="empty">Acá van a aparecer las opiniones de la mesa, con sus votos.</p>';return;}
+  el.innerHTML=D.log.length?D.log.slice().reverse().map(entryHTML).join(''):'<p class="empty">Todavía nadie habló.</p>';
+}
+
+/* ---------- Reglas ---------- */
+var FIELDS=[
+ ['Mesa de debate',[
+  {k:'seats',l:'Asientos por mesa',min:3,max:8,u:'disertantes'},
+  {k:'maxWords',l:'Palabras por opinión',min:10,max:300,u:'palabras'},
+  {k:'startSec',l:'Tiempo para empezar a opinar',min:3,max:60,u:'segundos'},
+  {k:'endSec',l:'Tiempo para terminar la opinión',min:10,max:180,u:'segundos'},
+  {k:'turns',l:'Turnos por disertante',min:1,max:5,u:'turnos'},
+  {k:'audience',l:'Público presente (simulado)',min:0,max:200,u:'personas'},
+  {k:'expel',l:'Para expulsar a alguien hace falta',type:'select',opts:[['majority','La mayoría de la mesa'],['twothirds','Dos tercios de la mesa'],['one','Un solo voto']]},
+  {k:'againstSubtracts',l:'Los votos en contra restan puntos',type:'check'}]],
+ ['Convivencia',[
+  {k:'badPenalty',l:'Puntos que resta cada mala palabra',min:0,max:50,u:'puntos'},
+  {k:'badStrikes',l:'Avisos antes de la expulsión de la mesa',min:1,max:5,u:'avisos'},
+  {k:'badWords',l:'Palabras no permitidas',type:'area'}]]
+];
+var FM={};FIELDS.forEach(function(g){g[1].forEach(function(f){FM[f.k]=f;});});
+function renderRules(){
+  $('#rules').innerHTML=FIELDS.map(function(g){
+    return '<div class="panel"><h3>'+g[0]+'</h3>'+g[1].map(function(f){
+      var id='set-'+f.k;
+      if(f.type==='area')return '<div class="field sel"><label for="'+id+'">'+f.l+'<small>separadas por coma</small></label><textarea id="'+id+'" rows="5" data-k="'+f.k+'">'+esc(S[f.k])+'</textarea></div>';
+      if(f.type==='check')return '<div class="field chk"><label for="'+id+'">'+f.l+'</label><input type="checkbox" id="'+id+'" data-k="'+f.k+'"'+(S[f.k]?' checked':'')+'></div>';
+      if(f.type==='select')return '<div class="field sel"><label for="'+id+'">'+f.l+'</label><select id="'+id+'" data-k="'+f.k+'">'+f.opts.map(function(o){return '<option value="'+o[0]+'"'+(String(S[f.k])===o[0]?' selected':'')+'>'+o[1]+'</option>';}).join('')+'</select></div>';
+      return '<div class="field"><label for="'+id+'">'+f.l+'<small>'+f.u+'</small></label><input type="number" id="'+id+'" data-k="'+f.k+'" min="'+f.min+'" max="'+f.max+'" value="'+S[f.k]+'"></div>';
+    }).join('')+'</div>';
+  }).join('');
+  renderRateNote();
+}
+function renderRateNote(){
+  var w=Math.round(S.endSec/60*40);
+  $('#rate-note').innerHTML='Con '+S.endSec+' segundos para terminar, una persona que escribe a unas 40 palabras por minuto llega a unas <b>'+w+' palabras</b>, y el límite es '+S.maxWords+'. Hablando, ese mismo tiempo alcanza para unas '+Math.round(S.endSec/60*140)+'.';
+}
+$('#rules').addEventListener('change',function(ev){
+  var el=ev.target,k=el.getAttribute('data-k');if(!k)return;var f=FM[k];
+  if(f.type==='check')S[k]=el.checked;
+  else if(f.type==='area')S[k]=el.value;
+  else if(f.type==='select')S[k]=typeof DEFAULTS[k]==='number'?+el.value:el.value;
+  else{var v=parseInt(el.value,10);if(isNaN(v))v=DEFAULTS[k];S[k]=clamp(v,f.min,f.max);el.value=S[k];}
+  save();renderRateNote();if(!D||D.finished)renderTable();updateWc('m');
+});
+
+/* ---------- Eventos globales ---------- */
+document.addEventListener('click',function(ev){
+  var el=ev.target.closest('[data-act]');if(!el)return;
+  var act=el.getAttribute('data-act'),id=+el.getAttribute('data-id');
+  if(act==='visit'){var n=newsById(id);n.visits++;var v=$('#vis-'+id);if(v)v.textContent=n.visits;return;}
+  if(act==='filter'){filter=el.getAttribute('data-t');renderChips();renderFeed();}
+  else if(act==='debate'){if(!D||D.finished){selNews=id;$('#mesa-news').value=String(id);renderMesaHead();}go('mesa');}
+  else if(act==='go')go(el.getAttribute('data-v'));
+  else if(act==='mesa-start')startDebate();
+  else if(act==='mesa-end'){if(D&&!D.finished)finishDebate('La mesa se cerró antes de terminar los turnos.');}
+  else if(act==='vote')userVote(id,el.getAttribute('data-dir'));
+  else if(act==='expel')toggleExpel(+el.getAttribute('data-k'));
+  else if(act==='rejoin')rejoin();
+  else if(act==='send')sendMsg(el.getAttribute('data-p'));
+  else if(act==='demo-level'){ME.points=Math.max(ME.points,120);save();renderMe();toast('Listo: nivel 3. Podés publicar más noticias.');}
+  else if(act==='demo-reset'){ME.points=0;ME.posted=0;ACC=null;save();renderMe();toast('Progreso y registro reiniciados.');}
+  else if(act==='auth-open')openAuth(null);
+  else if(act==='auth-close')closeAuth();
+  else if(act==='auth-provider')doLogin(el.getAttribute('data-p'));
+  else if(act==='logout'){ACC=null;save();renderMe();toast('Saliste de tu cuenta.');}
+  else if(act==='mode')setMode(el.getAttribute('data-p'),el.getAttribute('data-mode'));
+  else if(act==='rec')toggleRec(el.getAttribute('data-p'));
+  else if(act==='sim')simDictate(el.getAttribute('data-p'));
+  else if(act==='rules-default'){Object.assign(S,DEFAULTS);save();renderRules();renderTable();toast('Volvieron los valores del planteo original.');}
+});
+document.addEventListener('input',function(ev){
+  var t=ev.target;
+  if(t.id==='m-msg'){var p=t.id.charAt(0);t.value=clampWords(t.value,S.maxWords);updateWc(p);onTyping(p);}
+});
+document.addEventListener('keydown',function(ev){
+  var t=ev.target;
+  if((t.id==='m-msg')&&ev.key==='Enter'&&(ev.ctrlKey||ev.metaKey)){ev.preventDefault();sendMsg(t.id.charAt(0));}
+});
+$('#mesa-news').addEventListener('change',function(){selNews=+this.value;});
+document.addEventListener('submit',function(ev){if(ev.target.id==='auth-form'){ev.preventDefault();doLogin('email');}});
+$('#auth').addEventListener('click',function(ev){if(ev.target===this)closeAuth();});
+document.addEventListener('keydown',function(ev){if(ev.key==='Escape'&&!$('#auth').hidden)closeAuth();});
+
+/* ---------- Arranque ---------- */
+load();
+$('#m-host').innerHTML=composerHTML('m','<button class="btn ghost" id="m-rejoin" data-act="rejoin" hidden>Volver a sentarme</button> ');
+$('#pf-topic').innerHTML=TOPICS.map(function(t){return '<option>'+t+'</option>';}).join('');
+renderMe();renderChips();renderFeed();renderMesaSelect();renderRules();
+renderTable();renderLog();updateWc('m');updateMesaLive();
+setInterval(function(){debateTick();},250);
+show(location.hash.slice(1));
+})();
+</script>
+</body>
+</html>
