@@ -1,113 +1,1154 @@
-rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-
-    function signedIn() {
-      return request.auth != null;
-    }
-
-    // Perfil de cada persona: solo ella lo crea y lo modifica.
-    match /users/{userId} {
-      allow read: if signedIn();
-
-      allow create: if signedIn()
-        && request.auth.uid == userId
-        && request.resource.data.keys().hasOnly(['name', 'points', 'postDay', 'postsToday', 'createdAt'])
-        && request.resource.data.name is string
-        && request.resource.data.name.size() >= 2
-        && request.resource.data.name.size() <= 20
-        && request.resource.data.points == 0
-        && request.resource.data.postDay is string
-        && request.resource.data.postsToday == 0
-        && request.resource.data.createdAt == request.time;
-
-      allow update: if signedIn()
-        && request.auth.uid == userId
-        && request.resource.data.keys().hasOnly(['name', 'points', 'postDay', 'postsToday', 'createdAt'])
-        && request.resource.data.name == resource.data.name
-        && request.resource.data.createdAt == resource.data.createdAt
-        && request.resource.data.points is int
-        && request.resource.data.points >= 0
-        && request.resource.data.points - resource.data.points <= 300
-        && request.resource.data.points - resource.data.points >= -100
-        && request.resource.data.postsToday is int
-        && request.resource.data.postsToday >= 0
-        && request.resource.data.postsToday <= 20;
-
-      allow delete: if false;
-    }
-
-    // Noticias: las ve cualquiera; las publica quien tiene cuenta.
-    match /news/{newsId} {
-      allow read: if true;
-
-      allow create: if signedIn()
-        && request.resource.data.keys().hasOnly(['topic', 'title', 'lede', 'url', 'author', 'authorUid', 'visits', 'createdAt'])
-        && request.resource.data.authorUid == request.auth.uid
-        && request.resource.data.topic in ['Política', 'Deportes', 'Espectáculos', 'Economía', 'Tecnología', 'Sociedad']
-        && request.resource.data.title is string
-        && request.resource.data.title.size() >= 8
-        && request.resource.data.title.size() <= 160
-        && request.resource.data.lede is string
-        && request.resource.data.lede.size() >= 20
-        && request.resource.data.lede.size() <= 400
-        && request.resource.data.url is string
-        && request.resource.data.url.size() <= 500
-        && request.resource.data.url.matches('^https?://.+')
-        && request.resource.data.author is string
-        && request.resource.data.author.size() >= 2
-        && request.resource.data.author.size() <= 20
-        && request.resource.data.visits == 0
-        && request.resource.data.createdAt == request.time;
-
-      // Lo único que se puede cambiar de una noticia es sumar una visita.
-      allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(['visits'])
-        && request.resource.data.visits == resource.data.visits + 1;
-
-      allow delete: if false;
-    }
-    // ---------- Mesas de debate en tiempo real ----------
-    match /tables/{tableId} {
-      allow read: if signedIn();
-
-      allow create: if signedIn()
-        && request.resource.data.keys().hasOnly(['newsId','newsTitle','newsTopic','hostUid','hostName','status','maxSeats','cfg','players','round','queue','cur','phase','turnNo','expel','events','finishNote','createdAt'])
-        && request.resource.data.hostUid == request.auth.uid
-        && request.resource.data.status == 'waiting'
-        && request.resource.data.maxSeats >= 2 && request.resource.data.maxSeats <= 8
-        && request.resource.data.players.size() == 1
-        && request.auth.uid in request.resource.data.players
-        && request.resource.data.createdAt == request.time;
-
-      // Puede modificar la mesa quien está sentado, o cualquiera mientras esté en espera (para sentarse).
-      allow update: if signedIn()
-        && (request.auth.uid in resource.data.players || resource.data.status == 'waiting');
-
-      allow delete: if false;
-
-      match /opinions/{opId} {
-        allow read: if signedIn();
-        allow create: if signedIn()
-          && request.resource.data.uid == request.auth.uid
-          && request.resource.data.text is string
-          && request.resource.data.text.size() <= 1500
-          && request.resource.data.fav == 0 && request.resource.data.against == 0
-          && request.resource.data.createdAt == request.time;
-        // Solo se pueden mover los contadores de votos, de a uno, y no en la propia opinión.
-        allow update: if signedIn()
-          && resource.data.uid != request.auth.uid
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['fav','against'])
-          && request.resource.data.fav >= 0 && request.resource.data.against >= 0
-          && request.resource.data.fav - resource.data.fav >= -1 && request.resource.data.fav - resource.data.fav <= 1
-          && request.resource.data.against - resource.data.against >= -1 && request.resource.data.against - resource.data.against <= 1;
-        allow delete: if false;
-      }
-
-      // Cada persona guarda solo sus propios votos.
-      match /ballots/{uid} {
-        allow read, write: if signedIn() && request.auth.uid == uid;
-      }
-    }
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>html{color-scheme:light}body{margin:0}img{max-width:100%}[hidden]{display:none!important}</style>
+<title>Mesa de Debate</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=Figtree:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap">
+<style>
+/* Layout: cabecera + pestañas; la mesa hexagonal manda en la vista Mesa, con la consola de turno al costado. */
+:root{
+  --bg:#F1EEEF; --surface:#FFFFFF; --surface-2:#F7F4F5; --ink:#201B1E; --muted:#675F63; --line:#DCD6D9;
+  --felt:#C23742; --felt-hi:#DE5159; --rim:#8F5A55; --on-felt:#FFFFFF; --seat:#847D81;
+  --accent:#C23742; --accent-ink:#FFFFFF; --mine:#1F5FA8; --for:#157356; --against:#A94A12;
+  --note-bg:#FFF2D9; --note-ink:#5E3D00; --focus:#1F5FA8;
+  --font-display:'Bricolage Grotesque','Segoe UI',system-ui,sans-serif;
+  --font-body:'Figtree','Segoe UI',system-ui,sans-serif;
+  --font-mono:'IBM Plex Mono',ui-monospace,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#171216; --surface:#221C21; --surface-2:#2B242A; --ink:#F2EDF0; --muted:#AFA5AB; --line:#3C343B;
+    --felt:#A9303B; --felt-hi:#C84650; --rim:#6D4640; --seat:#9C939A;
+    --accent:#E5636B; --accent-ink:#1A1215; --mine:#7AAEF2; --for:#4CC59B; --against:#F09A5B;
+    --note-bg:#3A2D12; --note-ink:#F4D58A; --focus:#7AAEF2; color-scheme:dark;
   }
 }
+:root[data-theme="dark"]{
+  --bg:#171216; --surface:#221C21; --surface-2:#2B242A; --ink:#F2EDF0; --muted:#AFA5AB; --line:#3C343B;
+  --felt:#A9303B; --felt-hi:#C84650; --rim:#6D4640; --seat:#9C939A;
+  --accent:#E5636B; --accent-ink:#1A1215; --mine:#7AAEF2; --for:#4CC59B; --against:#F09A5B;
+  --note-bg:#3A2D12; --note-ink:#F4D58A; --focus:#7AAEF2; color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--font-body);font-size:15px;line-height:1.5;
+  padding-block:0 56px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.wrap{max-width:1180px;margin:0 auto}
+h1,h2,h3,h4{font-family:var(--font-display);text-wrap:balance;margin:0}
+p{margin:0}
+:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+button,input,select,textarea{font:inherit;color:inherit}
 
+/* Cabecera */
+.top{display:flex;flex-wrap:wrap;align-items:center;gap:14px 28px;padding-block:20px 12px}
+.brand{display:flex;align-items:center;gap:12px}
+.brand h1{font-size:30px;line-height:1;font-weight:700;letter-spacing:-.02em}
+.brand small{display:block;color:var(--muted);font-size:12.5px;margin-top:3px}
+.me{margin-left:auto;width:230px;min-width:0}
+.me-top{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.lvl{font:600 12px var(--font-body);letter-spacing:.06em;text-transform:uppercase;color:var(--accent)}
+.me-name{font-weight:600}
+.pts{margin-left:auto;font:600 13px var(--font-mono);font-variant-numeric:tabular-nums}
+.meter{height:6px;background:var(--line);border-radius:3px;margin-top:6px;overflow:hidden}
+.meter i{display:block;height:100%;background:var(--accent);border-radius:3px;transition:width .4s}
+.me-next{font-size:12px;color:var(--muted);margin-top:4px}
+nav.tabs{display:flex;gap:2px;overflow-x:auto;border-bottom:1px solid var(--line);margin-bottom:24px}
+nav.tabs a{padding:10px 14px;text-decoration:none;color:var(--muted);font-weight:600;white-space:nowrap;border-bottom:3px solid transparent;margin-bottom:-1px}
+nav.tabs a:hover{color:var(--ink)}
+nav.tabs a[aria-current="page"]{color:var(--ink);border-bottom-color:var(--accent)}
+
+/* Piezas comunes */
+.view-head{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px 24px;margin-bottom:20px}
+.view-head h2{font-size:28px;font-weight:700;letter-spacing:-.015em}
+.view-head p{color:var(--muted);max-width:62ch;margin-top:4px}
+.head-actions{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end}
+.head-actions label{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--muted);font-weight:600;min-width:0}
+.head-actions select{max-width:340px}
+.btn{font-weight:600;font-size:14px;padding:9px 15px;border-radius:7px;border:1px solid var(--accent);background:var(--accent);color:var(--accent-ink);cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:7px;line-height:1.2}
+.btn.ghost{background:transparent;color:var(--ink);border-color:var(--line)}
+.btn.ghost:hover:not(:disabled){border-color:var(--muted)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn:hover:not(:disabled){filter:brightness(1.06)}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:16px}
+input[type=text],input[type=url],input[type=number],input[type=password],select,textarea{background:var(--surface);border:1px solid var(--line);border-radius:7px;padding:8px 10px;width:100%;min-width:0}
+textarea{resize:vertical;line-height:1.5}
+textarea:disabled{background:var(--surface-2);color:var(--muted)}
+.chip{display:inline-block;font-size:12px;font-weight:600;padding:2px 9px;border-radius:99px;border:1px solid var(--line);color:var(--muted)}
+.tag{font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);border:1px solid var(--line);padding:1px 7px;border-radius:4px}
+.note{background:var(--note-bg);color:var(--note-ink);border-radius:8px;padding:10px 12px;font-size:13.5px}
+.empty{color:var(--muted);font-size:14px;padding:14px 2px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.av{display:inline-grid;place-items:center;width:30px;height:30px;border-radius:50%;border:2px solid var(--seat);font:600 13px var(--font-display);flex:none;background:var(--surface)}
+
+/* Noticias */
+.news-layout{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:28px;align-items:start}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}
+.chips button{border:1px solid var(--line);background:transparent;border-radius:99px;padding:5px 13px;font-weight:600;font-size:13.5px;cursor:pointer;color:var(--muted)}
+.chips button[aria-pressed="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+#feed{display:flex;flex-direction:column;gap:14px}
+.news{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:18px 20px;display:flex;flex-direction:column;gap:8px}
+.news-top{display:flex;gap:10px;align-items:center}
+.topic{font:700 12px var(--font-body);letter-spacing:.07em;text-transform:uppercase;color:var(--accent)}
+.news h3{font-size:21px;line-height:1.2;font-weight:650;letter-spacing:-.01em}
+.news p{color:var(--muted);max-width:68ch}
+.news-meta{display:flex;flex-wrap:wrap;gap:4px 18px;font-size:13px;color:var(--muted)}
+.news-meta b{font-family:var(--font-mono);font-weight:600;color:var(--ink);font-variant-numeric:tabular-nums}
+.news-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:6px}
+#post-form{display:flex;flex-direction:column;gap:12px;position:sticky;top:12px}
+#post-form h3{font-size:19px}
+#post-form label{display:flex;flex-direction:column;gap:4px;font-size:13px;font-weight:600}
+.hint{font-size:12.5px;color:var(--muted);font-weight:400}
+.form-msg{font-size:13.5px;min-height:1.4em}
+.form-msg.ok{color:var(--for)} .form-msg.bad{color:var(--against)}
+
+/* Mesa */
+.mesa-grid{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);gap:28px;align-items:start}
+.table-wrap svg{display:block;width:100%;max-width:640px;height:auto;margin:0 auto;overflow:visible}
+.rim{stroke:var(--rim);stroke-width:12;stroke-linejoin:round}
+.on-felt{fill:var(--on-felt);text-anchor:middle}
+.wave{fill:none;stroke:rgba(0,0,0,.16);stroke-width:9;stroke-linecap:round}
+.talking .wave{animation:wv 1.3s ease-in-out infinite}
+.talking .wave:nth-of-type(2n){animation-delay:.2s}
+@keyframes wv{50%{opacity:.35}}
+.seat .body{fill:var(--surface);stroke:var(--seat);stroke-width:3}
+.seat.me .body{stroke:var(--mine);stroke-width:4}
+.seat.speaking .body{stroke:var(--ink);stroke-width:5}
+.seat.out .body,.seat.empty .body{stroke-dasharray:5 5}
+.seat.out,.seat.empty{opacity:.55}
+.seat .ini{font:600 18px var(--font-display);fill:var(--ink);text-anchor:middle;dominant-baseline:central}
+.seat .nm{font:600 13px var(--font-body);fill:var(--ink);text-anchor:middle;paint-order:stroke;stroke:var(--bg);stroke-width:4px;stroke-linejoin:round}
+.pulse{fill:none;stroke:var(--ink);stroke-width:2;opacity:0;transform-box:fill-box;transform-origin:center;animation:pulse 1.6s ease-out infinite}
+@keyframes pulse{0%{transform:scale(1);opacity:.5}100%{transform:scale(1.55);opacity:0}}
+.roster{margin-top:18px}
+.roster h3{font-size:17px;margin-bottom:8px}
+.roster ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.roster li{display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--line)}
+.roster li.out{opacity:.55}
+.roster .who{display:flex;flex-direction:column;min-width:0;flex:1}
+.roster .who span{font-size:12.5px;color:var(--muted)}
+.roster .you{font-style:normal;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--mine);margin-left:4px}
+.votes{font:600 13px var(--font-mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+.votes .f{color:var(--for)} .votes .a{color:var(--against)}
+.mini{font-size:12.5px;font-weight:600;padding:4px 10px;border-radius:6px;border:1px solid var(--line);background:transparent;cursor:pointer;white-space:nowrap}
+.mini[aria-pressed="true"]{background:var(--against);border-color:var(--against);color:var(--surface)}
+.composer{display:flex;flex-direction:column;gap:10px}
+.composer.active{border-color:var(--accent)}
+.turn-info{font:650 18px var(--font-display);line-height:1.25}
+.cd-row{display:flex;align-items:baseline;gap:10px}
+.cd{font:600 30px var(--font-mono);font-variant-numeric:tabular-nums;min-width:3.2ch}
+.cd-cap{color:var(--muted);font-size:13.5px}
+.bar{height:6px;background:var(--line);border-radius:3px;overflow:hidden}
+.bar i{display:block;height:100%;width:0;background:var(--ink);transition:width .25s linear}
+.bar[data-low="1"] i{background:var(--against)}
+.comp-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.wc{font:500 13px var(--font-mono);color:var(--muted);font-variant-numeric:tabular-nums}
+.log{display:flex;flex-direction:column;gap:10px;margin-top:16px;max-height:620px;overflow-y:auto;padding-right:2px}
+.op{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:8px}
+.op.mine{border-color:var(--mine)}
+.op header{display:flex;align-items:center;gap:9px}
+.op .meta{font-size:12.5px;color:var(--muted)}
+.op p{max-width:70ch}
+.vote-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.vote{font-size:13px;font-weight:600;border:1px solid var(--line);background:transparent;border-radius:6px;padding:4px 11px;cursor:pointer;display:inline-flex;gap:7px}
+.vote b{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+.vote.f[aria-pressed="true"]{background:var(--for);border-color:var(--for);color:var(--surface)}
+.vote.a[aria-pressed="true"]{background:var(--against);border-color:var(--against);color:var(--surface)}
+.vote:disabled{opacity:.5;cursor:default}
+.sys{font-size:13px;color:var(--muted);text-align:center;padding:2px 8px}
+.sys.golpe{color:var(--against);font-weight:700}
+#mesa-result{margin-top:22px}
+.result h3{font-size:24px;margin-bottom:4px}
+.result table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px}
+.result th,.result td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}
+.result th{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+.result tr.me td{font-weight:700}
+.result .tw{overflow-x:auto}
+.result-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:10px}
+
+#lobby{display:flex;flex-direction:column;gap:14px}
+.lobby-h{font-size:19px}
+
+/* Reglas */
+.stack{display:flex;flex-direction:column;gap:16px;max-width:760px}
+.stack ul{margin:6px 0 0;padding-left:20px;display:flex;flex-direction:column;gap:5px}
+.stack h3{font-size:19px;margin-bottom:2px}
+.rules-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:20px;align-items:start}
+.rules-grid h3{font-size:19px;margin-bottom:10px}
+.field{display:grid;grid-template-columns:minmax(0,1fr) 120px;gap:10px;align-items:center;padding:7px 0;border-top:1px solid var(--line);font-size:14px}
+.field small{display:block;color:var(--muted);font-size:12px}
+.field.chk{grid-template-columns:minmax(0,1fr) auto}
+.field input[type=checkbox]{width:20px;height:20px}
+.field.sel{grid-template-columns:1fr}
+.rate{margin-top:12px}
+footer.fine{margin-top:36px;font-size:12.5px;color:var(--muted);max-width:80ch}
+
+/* Cuenta, modo voz y lenguaje no permitido */
+.acct{display:flex;align-items:center;gap:4px 8px;flex-wrap:wrap;font-size:13px;margin-bottom:10px}
+.acct b{font-weight:700}
+.link{background:none;border:0;padding:0;color:var(--accent);font-weight:600;cursor:pointer;text-decoration:underline;font-size:13px}
+.modal{position:fixed;inset:0;background:rgba(10,6,9,.55);display:grid;place-items:center;padding:max(16px,env(safe-area-inset-top,0px)) max(16px,env(safe-area-inset-right,0px)) max(16px,env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px));z-index:30;overflow-y:auto}
+.modal-card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:22px;width:100%;max-width:420px;display:flex;flex-direction:column;gap:12px}
+.modal-card h3{font-size:22px}
+.modal-card label{display:flex;flex-direction:column;gap:4px;font-size:13px;font-weight:600}
+.modal-card form{display:flex;flex-direction:column;gap:10px}
+.wide{width:100%;justify-content:center}
+.or{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:12.5px}
+.or::before,.or::after{content:"";flex:1;height:1px;background:var(--line)}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;align-self:flex-start}
+.seg button{border:0;background:transparent;padding:6px 16px;font-weight:600;font-size:13.5px;cursor:pointer;color:var(--muted)}
+.seg button[aria-pressed="true"]{background:var(--ink);color:var(--bg)}
+.tbox{display:flex;flex-direction:column;gap:8px}
+.warn{font-size:13px;color:var(--against);font-weight:600;min-height:1.3em}
+.voice{display:flex;flex-direction:column;gap:10px;padding:14px;border:1px dashed var(--line);border-radius:8px}
+.rec-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.bars{display:inline-flex;gap:3px;align-items:center;height:22px}
+.bars i{width:3px;height:6px;background:var(--muted);border-radius:2px}
+.rec-on .bars i{background:var(--accent);animation:bars .9s ease-in-out infinite}
+.rec-on .bars i:nth-child(2n){animation-delay:.15s}
+.rec-on .bars i:nth-child(3n){animation-delay:.3s}
+@keyframes bars{50%{height:20px}}
+.audio{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted);border:1px solid var(--line);border-radius:99px;padding:3px 11px;align-self:flex-start}
+.op.flag{border-color:var(--against)}
+.flagtag{font-size:11.5px;font-weight:700;color:var(--against);text-transform:uppercase;letter-spacing:.05em}
+@media (prefers-reduced-motion:reduce){.rec-on .bars i{animation:none}}
+
+#toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(20px + env(safe-area-inset-bottom,0px));background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:8px;font-weight:600;font-size:14px;max-width:min(92vw,520px);text-align:center;z-index:20}
+
+@media (max-width:900px){
+  .news-layout,.mesa-grid{grid-template-columns:minmax(0,1fr)}
+  #post-form{position:static}
+  .me{margin-left:0;width:100%}
+}
+@media (max-width:640px){
+  .view-head h2{font-size:24px}
+}
+@media (prefers-reduced-motion:reduce){
+  .pulse,.talking .wave{animation:none}
+  .meter i,.bar i{transition:none}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <svg width="40" height="40" viewBox="0 0 40 40" aria-hidden="true"><polygon points="20,3 35,11.5 35,28.5 20,37 5,28.5 5,11.5" fill="var(--felt)" stroke="var(--rim)" stroke-width="3" stroke-linejoin="round"/></svg>
+      <div><h1>Mesa</h1><small>Debatí la noticia como en una mesa de café</small></div>
+    </div>
+    <div class="me" id="me" aria-live="polite"></div>
+  </header>
+  <nav class="tabs" id="nav" aria-label="Secciones">
+    <a href="#noticias" data-v="noticias">Noticias</a>
+    <a href="#mesa" data-v="mesa">Mesa</a>
+    <a href="#reglas" data-v="reglas">Reglas del prototipo</a>
+  </nav>
+
+  <!-- NOTICIAS -->
+  <section id="v-noticias">
+    <div class="view-head"><div><h2>Noticias para discutir</h2><p>Publicá el titular y el copete de una nota de cualquier portal, con el link a la nota completa. Ubicala en la temática que corresponda.</p></div></div>
+    <div class="news-layout">
+      <div>
+        <div class="chips" id="chips" role="group" aria-label="Filtrar por temática"></div>
+        <div id="feed"></div>
+      </div>
+      <form id="post-form" class="panel" novalidate>
+        <h3>Publicar una noticia</h3>
+        <label for="pf-title">Titular<input type="text" id="pf-title" maxlength="160" placeholder="Copiá el titular tal como lo publica el portal"></label>
+        <label for="pf-lede">Copete<textarea id="pf-lede" rows="4" maxlength="400" placeholder="La bajada o copete de la nota"></textarea></label>
+        <label for="pf-url">Link a la nota completa<input type="url" id="pf-url" placeholder="https://"></label>
+        <label for="pf-topic">Temática<select id="pf-topic"></select></label>
+        <div class="form-msg" id="pf-msg" role="status"></div>
+        <button class="btn" type="submit">Publicar</button>
+        <p class="hint" id="quota"></p>
+      </form>
+    </div>
+  </section>
+
+  <!-- MESA -->
+  <section id="v-mesa" hidden>
+    <div class="view-head">
+      <div><h2>Mesas de debate</h2><p id="mesa-sub"></p></div>
+      <div class="head-actions">
+        <label for="mesa-news">Noticia para una mesa nueva<select id="mesa-news"></select></label>
+        <button class="btn" id="mesa-btn" data-act="table-create">Abrir una mesa nueva</button>
+      </div>
+    </div>
+    <div id="lobby"></div>
+    <div id="table-view" hidden>
+      <div class="mesa-grid">
+        <div>
+          <div class="table-wrap"><svg id="tbl" viewBox="0 0 640 640" role="img" aria-label="Mesa de debate con sus asientos"></svg></div>
+          <div class="roster" id="roster"></div>
+        </div>
+        <div>
+          <div class="panel" id="m-wait" hidden></div>
+          <div class="panel" id="m-host" hidden></div>
+          <div class="log" id="log" aria-label="Opiniones de la mesa"></div>
+        </div>
+      </div>
+      <div id="mesa-result" aria-live="polite"></div>
+    </div>
+  </section>
+
+  <!-- REGLAS -->
+  <section id="v-reglas" hidden>
+    <div class="view-head"><div><h2>Reglas del prototipo</h2><p>Todos los números del planteo están acá. Cambialos y probá la mesa de nuevo. Cada mesa guarda las reglas de quien la abre.</p></div></div>
+    <div class="rules-grid" id="rules"></div>
+    <div class="note rate" id="rate-note"></div>
+    <div class="rules-grid" style="margin-top:22px">
+      <div class="panel stack"><h3>Para decidir juntos</h3>
+        <ul>
+          <li><b>Texto o voz.</b> Se puede participar de las dos formas. Hablando, 92 palabras en 40 segundos es un ritmo normal; escribiendo, no.</li>
+          <li><b>Votos en contra.</b> Ahora se muestran pero no restan puntos. Se puede cambiar arriba.</li>
+          <li><b>Mesas con personas reales.</b> Cada mesa tiene hasta 6 lugares y se puede empezar con 2 personas sentadas. Quien la abre toca "Empezar". Los turnos y los relojes son iguales para todos, y las opiniones se votan entre quienes participan y quienes miran.</li>
+          <li><b>Malas palabras.</b> Se tapan con asteriscos, restan puntos y, al llegar al límite de avisos, sacan de la mesa. Un filtro de lista no detecta insultos escritos con trucos; con usuarios reales conviene sumar reportes.</li>
+          <li><b>Voz.</b> Se convierte a texto en el navegador y los demás leen la transcripción. Si la vista bloquea el micrófono, queda el dictado simulado.</li>
+        </ul>
+      </div>
+      <div class="panel stack"><h3>Valores originales</h3>
+        <p class="hint">Estos ajustes se guardan solo en tu navegador. Tu cuenta, tus puntos y las noticias se guardan en Firebase.</p>
+        <div class="result-actions"><button class="btn ghost" data-act="rules-default">Volver a los valores del planteo</button></div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="fine">Prototipo. Las noticias marcadas como ejemplo son inventadas. Las cuentas, los puntos, las noticias y las mesas se guardan en Firebase y las ven todas las personas conectadas. El contador de visitas cuenta los clics en «Leer la nota completa» hechos desde esta página.</footer>
+</div>
+<div id="toast" role="status" hidden></div>
+<div id="auth" class="modal" hidden><div class="modal-card" id="auth-card" role="dialog" aria-modal="true" aria-labelledby="auth-t"></div></div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+import { getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, createUserWithEmailAndPassword, signInWithEmailAndPassword, updateProfile, signOut, sendPasswordResetEmail } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+import { getFirestore, doc, getDoc, setDoc, updateDoc, addDoc, collection, query, orderBy, limit, onSnapshot, serverTimestamp, increment, runTransaction } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+(function(){
+'use strict';
+var $=function(s,r){return (r||document).querySelector(s);};
+var $$=function(s,r){return Array.prototype.slice.call((r||document).querySelectorAll(s));};
+var esc=function(s){return String(s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});};
+var rnd=function(a,b){return a+Math.random()*(b-a);};
+var pick=function(a){return a[Math.floor(Math.random()*a.length)];};
+var shuffle=function(a){a=a.slice();for(var i=a.length-1;i>0;i--){var j=Math.floor(Math.random()*(i+1));var t=a[i];a[i]=a[j];a[j]=t;}return a;};
+var now=function(){return Date.now();};
+var clamp=function(v,a,b){return Math.min(b,Math.max(a,v));};
+var wc=function(t){return (t.match(/\S+/g)||[]).length;};
+var lcFirst=function(s){return s.charAt(0).toLowerCase()+s.slice(1);};
+function clampWords(t,max){var re=/\S+/g,m,c=0;while((m=re.exec(t))){c++;if(c===max){var cut=m.index+m[0].length;return re.test(t)?t.slice(0,cut):t;}}return t;}
+
+/* ---------- Estado y reglas ---------- */
+var DEFAULTS={seats:6,maxWords:92,startSec:15,endSec:40,turns:2,expel:'majority',againstSubtracts:false,badPenalty:10,badStrikes:2,badWords:'hdp, hijo de puta, la puta madre, la concha, mierda, pelotudo, pelotuda, forro, forra, idiota, estúpido, imbécil, puta, puto'};
+var S=Object.assign({},DEFAULTS);
+var ME={points:0,postDay:'',postsToday:0};
+var ACC=null,authReady=false;
+var KEY='mesa-de-debate-prototipo';
+function load(){try{var j=JSON.parse(localStorage.getItem(KEY)||'null');if(j&&j.S)Object.keys(DEFAULTS).forEach(function(k){if(k in j.S&&typeof j.S[k]===typeof DEFAULTS[k])S[k]=j.S[k];});}catch(e){}}
+function save(){try{localStorage.setItem(KEY,JSON.stringify({S:S}));}catch(e){}}
+var LEVELS=[{n:1,name:'Parroquiano',min:0},{n:2,name:'Habitué',min:40},{n:3,name:'Tertuliano',min:120},{n:4,name:'Orador',min:260},{n:5,name:'Maestro de mesa',min:500}];
+function levelOf(p){var l=LEVELS[0];LEVELS.forEach(function(x){if(p>=x.min)l=x;});return l;}
+function acctHTML(){
+  if(!authReady)return '<div class="acct"><span class="hint">Conectando…</span></div>';
+  return ACC?'<div class="acct"><b>'+esc(ACC.name)+'</b><span class="hint">con '+esc(ACC.provider)+'</span><button class="link" data-act="logout">Salir</button></div>'
+    :'<div class="acct"><button class="btn" data-act="auth-open">Ingresar o registrarme</button><span class="hint">Gratis, con Google o email</span></div>';
+}
+function renderMe(){
+  var L=levelOf(ME.points),next=LEVELS.filter(function(x){return x.min>ME.points;})[0];
+  var pct=next?(ME.points-L.min)/(next.min-L.min)*100:100;
+  $('#me').innerHTML=acctHTML()+'<div class="me-top"><span class="lvl">Nivel '+L.n+'</span><span class="me-name">'+L.name+'</span><span class="pts">'+ME.points+' pts</span></div>'+
+    '<div class="meter" role="img" aria-label="Avance hacia el próximo nivel"><i style="width:'+pct.toFixed(0)+'%"></i></div>'+
+    '<div class="me-next">'+(next?'Faltan '+(next.min-ME.points)+' pts para el nivel '+next.n:'Nivel máximo')+'</div>';
+  renderQuota();renderMesaHead();
+}
+var toastT;
+function toast(msg){var t=$('#toast');t.textContent=msg;t.hidden=false;clearTimeout(toastT);toastT=setTimeout(function(){t.hidden=true;},4200);}
+
+/* ---------- Datos de ejemplo ---------- */
+var uid=100;
+var TOPICS=['Política','Deportes','Espectáculos','Economía','Tecnología','Sociedad'];
+var EXAMPLES=[
+ {id:'e1',topic:'Política',title:'El Congreso empieza a tratar un nuevo régimen de incentivos para pymes',lede:'Legisladores de distintos bloques discuten reducir cargas a las empresas chicas a cambio de metas de empleo. Hay apoyos y críticas por el costo fiscal.',url:'https://example.com/politica/regimen-pymes',author:'Lucía',visits:128},
+ {id:'e2',topic:'Deportes',title:'Polémica por el cambio de formato del torneo local',lede:'Clubes y dirigentes se enfrentan por la propuesta de sumar una fase de playoffs. Los hinchas dividen opiniones en las redes.',url:'https://example.com/deportes/nuevo-formato',author:'Mateo',visits:342},
+ {id:'e3',topic:'Espectáculos',title:'Una serie nacional estrena su tercera temporada y divide a la crítica',lede:'Mientras algunos celebran el giro de la historia, otros señalan que perdió el ritmo de las primeras entregas.',url:'https://example.com/espectaculos/tercera-temporada',author:'Camila',visits:91},
+ {id:'e4',topic:'Economía',title:'Los alquileres vuelven al centro de la discusión',lede:'Inquilinos e inmobiliarias presentan cifras opuestas sobre el efecto de las últimas medidas en los contratos.',url:'https://example.com/economia/alquileres',author:'Joaquín',visits:207},
+ {id:'e5',topic:'Tecnología',title:'Las escuelas evalúan permitir el uso de inteligencia artificial en las tareas',lede:'Docentes y familias debaten si herramientas de este tipo ayudan a aprender o reemplazan el esfuerzo del alumno.',url:'https://example.com/tecnologia/ia-escuelas',author:'Valentina',visits:156},
+ {id:'e6',topic:'Sociedad',title:'Proponen prohibir los celulares dentro del aula en todo el país',lede:'El proyecto busca mejorar la atención en clase. Estudiantes y especialistas ofrecen miradas distintas.',url:'https://example.com/sociedad/celulares-aula',author:'Tomás',visits:264}
+].map(function(n){n.example=true;return n;});
+var NEWS=EXAMPLES.slice(),REAL=[];
+var BOT_NAMES=['Lucía','Mateo','Camila','Joaquín','Valentina','Tomás','Sofía','Bruno','Agustina','Facundo','Julieta','Nicolás'];
+var OPEN_PRO=['Estoy a favor, y te explico por qué.','A mí me parece que esto va en la dirección correcta.','Lo veo positivo y tengo razones concretas.','Desde mi punto de vista, es una buena señal.'];
+var OPEN_CON=['No coincido con lo que plantea la nota.','Me parece que acá se mira solo una parte del problema.','Discrepo, y lo digo con argumentos.','Lo veo con preocupación, y te cuento por qué.'];
+var REASON_PRO=['Los datos que cita la nota muestran un cambio que venía haciendo falta.','Medidas parecidas en otros casos dieron resultados razonables.','El beneficio lo van a notar las personas comunes, no solo los especialistas.','Es mejor intentar algo y corregirlo en el camino que seguir sin hacer nada.'];
+var REASON_CON=['El titular simplifica algo que tiene muchos matices y consecuencias.','Antes de festejar falta saber quién paga el costo y quién se beneficia de verdad.','Casos anteriores parecidos terminaron generando más problemas que soluciones.','Faltan datos concretos y la nota se queda en la superficie.'];
+var CLOSE=['Por eso creo que vale la pena discutirlo con calma.','Me gustaría saber qué opinan los demás sobre este punto.','Ese es mi argumento, ahora los escucho.','Si alguien tiene un dato que me haga cambiar de idea, lo leo.'];
+var OFF=['Che, ¿alguien sabe dónde conseguir entradas baratas para el recital del finde? Les paso mi contacto.','Pasen por mi canal, tengo descuentos en zapatillas, escríbanme al privado.','Esto me hace acordar a que ayer se me rompió el auto, qué día, no saben lo que fue.'];
+function botText(news,lean,prev){
+  var pro=lean==='pro',parts=[];
+  if(prev&&Math.random()<0.45)parts.push(prev+', te contesto.');
+  parts.push(pick(pro?OPEN_PRO:OPEN_CON));
+  var rs=shuffle(pro?REASON_PRO:REASON_CON);
+  parts.push(pick(['En un tema de '+news.topic.toLowerCase()+' como este,','Mirando el caso con calma,','Más allá del titular,'])+' '+lcFirst(rs[0]));
+  parts.push(rs[1]);
+  parts.push(pick(CLOSE));
+  return clampWords(parts.join(' '),S.maxWords);
+}
+function newsById(id){for(var i=0;i<NEWS.length;i++)if(NEWS[i].id===id)return NEWS[i];return NEWS[0];}
+function safeUrl(u){return /^https?:\/\//i.test(u)?u:'#';}
+function host(u){try{return new URL(u).hostname.replace(/^www\./,'');}catch(e){return u;}}
+
+/* ---------- Navegación ---------- */
+var VIEWS=['noticias','mesa','reglas'];
+function show(v){
+  if(VIEWS.indexOf(v)<0)v='noticias';
+  VIEWS.forEach(function(x){
+    $('#v-'+x).hidden=(x!==v);
+    var a=$('#nav a[data-v="'+x+'"]');
+    if(x===v)a.setAttribute('aria-current','page');else a.removeAttribute('aria-current');
+  });
+  if(v==='mesa'){renderMesaHead();if(T)renderTableView();else renderLobby();}
+  if(v==='reglas')renderRateNote();
+}
+window.addEventListener('hashchange',function(){show(location.hash.slice(1));});
+function go(v){if(location.hash.slice(1)===v)show(v);else location.hash=v;}
+
+/* ---------- Noticias ---------- */
+var filter='Todas';
+function renderChips(){
+  $('#chips').innerHTML=['Todas'].concat(TOPICS).map(function(t){return '<button type="button" data-act="filter" data-t="'+t+'" aria-pressed="'+(t===filter)+'">'+t+'</button>';}).join('');
+}
+function renderFeed(){
+  var list=NEWS.filter(function(n){return filter==='Todas'||n.topic===filter;});
+  $('#feed').innerHTML=list.length?list.map(function(n){
+    return '<article class="news"><div class="news-top"><span class="topic">'+esc(n.topic)+'</span>'+(n.example?'<span class="tag">Ejemplo</span>':'')+'</div>'+
+    '<h3>'+esc(n.title)+'</h3><p>'+esc(n.lede)+'</p>'+
+    '<div class="news-meta"><span>'+esc(host(n.url))+'</span><span>Publicó '+esc(n.author)+'</span><span><b id="vis-'+n.id+'">'+n.visits+'</b> visitas desde Mesa</span></div>'+
+    '<div class="news-actions"><a class="btn ghost" href="'+esc(safeUrl(n.url))+'" target="_blank" rel="noopener noreferrer" data-act="visit" data-id="'+n.id+'">Leer la nota completa <svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3h7v7M13 3 5 11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></a>'+
+    '<button class="btn" data-act="debate" data-id="'+n.id+'">Debatir en una mesa</button></div></article>';
+  }).join(''):'<p class="empty">Todavía no hay noticias en esta temática.</p>';
+}
+function today(){var d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
+function postsToday(){return ME.postDay===today()?ME.postsToday:0;}
+function postLimit(){return levelOf(ME.points).n+2;}
+function renderQuota(){
+  $('#quota').textContent=ACC?'Publicaciones de hoy: '+postsToday()+' de '+postLimit()+'. Cada nivel suma una más.':'Ingresá para publicar noticias.';
+}
+function renderMesaSelect(){
+  $('#mesa-news').innerHTML=NEWS.map(function(n){return '<option value="'+n.id+'">'+esc(n.topic)+' · '+esc(n.title)+'</option>';}).join('');
+  $('#mesa-news').value=String(selNews);
+}
+function pfMsg(t,ok){var m=$('#pf-msg');m.textContent=t;m.className='form-msg '+(ok?'ok':'bad');}
+$('#post-form').addEventListener('submit',function(ev){
+  ev.preventDefault();
+  var form=this;
+  if(!ACC)return openAuth('post');
+  if(postsToday()>=postLimit())return pfMsg('Llegaste al límite de hoy. Subí de nivel para publicar más.');
+  var title=$('#pf-title').value.trim(),lede=$('#pf-lede').value.trim(),url=$('#pf-url').value.trim(),topic=$('#pf-topic').value;
+  if(title.length<8)return pfMsg('Pegá el titular completo de la nota.');
+  if(lede.length<20)return pfMsg('Agregá el copete de la nota.');
+  var ok=false;try{ok=/^https?:$/.test(new URL(url).protocol)&&url.length<=500;}catch(e){}
+  if(!ok)return pfMsg('El link tiene que empezar con http:// o https://');
+  if(findBad(title+' '+lede).length)return pfMsg('El titular o el copete tienen lenguaje no permitido.');
+  var btn=form.querySelector('button[type=submit]');btn.disabled=true;pfMsg('Publicando…',true);
+  FB.addNews({topic:topic,title:title,lede:lede,url:url}).then(function(){form.reset();pfMsg('Publicada. Ya la ven todos y podés abrir una mesa con ella.',true);})
+    .catch(function(e){console.error(e);pfMsg(fbError(e),false);})
+    .then(function(){btn.disabled=false;});
+});
+
+/* ---------- Composer compartido ---------- */
+function composerHTML(p,extra){
+  return '<div class="composer" id="'+p+'-comp"><div class="turn-info" id="'+p+'-info" aria-live="polite"></div>'+
+  '<div class="cd-row"><span class="cd" id="'+p+'-cd">--</span><span class="cd-cap" id="'+p+'-cap"></span></div>'+
+  '<div class="bar"><i id="'+p+'-bar"></i></div>'+
+  '<div class="seg" role="group" aria-label="Cómo participar"><button type="button" data-act="mode" data-p="'+p+'" data-mode="texto" aria-pressed="true">Escribir</button><button type="button" data-act="mode" data-p="'+p+'" data-mode="voz" aria-pressed="false">Hablar</button></div>'+
+  '<div class="voice" id="'+p+'-voice" hidden><div class="rec-row"><button type="button" class="btn" id="'+p+'-rec" data-act="rec" data-p="'+p+'" disabled>Grabar</button><button type="button" class="btn ghost" id="'+p+'-sim" data-act="sim" data-p="'+p+'" disabled>Simular dictado</button><span class="bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span></div><p class="hint" id="'+p+'-vnote"></p></div>'+
+  '<label class="sr" for="'+p+'-msg">Tu opinión</label>'+
+  '<textarea id="'+p+'-msg" rows="5" placeholder="Escribí tu opinión cuando sea tu turno" disabled></textarea>'+
+  '<div class="warn" id="'+p+'-warn" role="status"></div>'+
+  '<div class="comp-foot"><span class="wc" id="'+p+'-wc">0 / 92</span><span>'+(extra||'')+'<button class="btn" id="'+p+'-send" data-act="send" data-p="'+p+'" disabled>Enviar opinión</button></span></div></div>';
+}
+function updateWc(p){
+  var v=$('#'+p+'-msg').value;
+  $('#'+p+'-wc').textContent=wc(v)+' / '+S.maxWords;
+  var w=$('#'+p+'-warn');if(w)w.textContent=findBad(v,T&&T.cfg&&T.cfg.badWords).length?'Hay lenguaje no permitido. Si lo enviás, se tapa y se penaliza ('+(T&&T.cfg?T.cfg.badPenalty:S.badPenalty)+' puntos).':'';
+}
+function setComposer(p,st){
+  var msg=$('#'+p+'-msg'),can=!!st.mine&&(st.phase==='wait'||st.phase==='write');
+  if(msg.disabled===can)msg.disabled=!can;
+  $('#'+p+'-send').disabled=!can;
+  $$('#'+p+'-voice button').forEach(function(b){b.disabled=!can;});
+  if(!can&&REC[p])stopRec(p);
+  $('#'+p+'-info').textContent=st.info||'';
+  $('#'+p+'-cd').textContent=st.cd||'--';
+  $('#'+p+'-cap').textContent=st.cap||'';
+  var bar=$('#'+p+'-bar');bar.style.width=(st.pct||0).toFixed(1)+'%';bar.parentNode.setAttribute('data-low',st.low?'1':'0');
+  $('#'+p+'-comp').classList.toggle('active',can);
+}
+function remInfo(deadline,total){var rem=Math.max(0,(deadline-now())/1000);return {rem:rem,cd:Math.ceil(rem)+' s',pct:total?rem/total*100:0,low:rem<=5};}
+
+/* ---------- Registro, lenguaje y voz ---------- */
+var authNext=null,authMode='create';
+function renderAuth(){
+  var c=authMode==='create';
+  $('#auth-card').innerHTML='<h3 id="auth-t">'+(c?'Creá tu cuenta':'Ingresá a tu cuenta')+'</h3><p class="hint">Hace falta una cuenta para publicar noticias y sentarte en una mesa.</p>'+
+  '<button type="button" class="btn ghost wide" data-act="auth-google">Continuar con Google</button>'+
+  '<div class="or">o con email</div>'+
+  '<div class="seg" role="group" aria-label="Tipo de ingreso"><button type="button" data-act="auth-mode" data-mode="create" aria-pressed="'+c+'">Crear cuenta</button><button type="button" data-act="auth-mode" data-mode="login" aria-pressed="'+(!c)+'">Ya tengo cuenta</button></div>'+
+  '<form id="auth-form" novalidate>'+(c?'<label for="au-name">Nombre en la mesa<input type="text" id="au-name" maxlength="20" autocomplete="nickname" placeholder="Cómo querés que te vean"></label>':'')+
+  '<label for="au-mail">Email<input type="text" id="au-mail" inputmode="email" autocomplete="email" placeholder="nombre@correo.com"></label>'+
+  '<label for="au-pass">Contraseña<input type="password" id="au-pass" autocomplete="'+(c?'new-password':'current-password')+'" placeholder="Mínimo 6 caracteres"></label>'+
+  '<div class="warn" id="au-msg" role="status"></div><button class="btn wide" type="submit">'+(c?'Crear cuenta':'Ingresar')+'</button></form>'+
+  (c?'':'<button class="link" type="button" data-act="auth-reset">Olvidé mi contraseña</button>')+
+  '<button class="link" data-act="auth-close" type="button">Cancelar</button>';
+}
+function openAuth(next){
+  if(!authReady){toast('Un segundo, estamos conectando tu cuenta.');return;}
+  authNext=next||null;authMode='create';renderAuth();$('#auth').hidden=false;
+  setTimeout(function(){var i=$('#au-name');if(i)i.focus();},30);
+}
+function closeAuth(){$('#auth').hidden=true;authNext=null;}
+function authMsg(t){var m=$('#au-msg');if(m)m.textContent=t||'';}
+function authBusy(b){$$('#auth-card button,#auth-card input').forEach(function(el){if(el.getAttribute('data-act')!=='auth-close')el.disabled=b;});}
+var MAILRE=/^\S+@\S+\.\S+$/;
+function doEmail(){
+  var create=authMode==='create',mail=$('#au-mail').value.trim(),pass=$('#au-pass').value,name=create?$('#au-name').value.trim():'';
+  if(create){
+    if(name.length<2){authMsg('Escribí el nombre con el que querés aparecer.');$('#au-name').focus();return;}
+    if(findBad(name).length){authMsg('Ese nombre no está permitido.');$('#au-name').focus();return;}
+  }
+  if(!MAILRE.test(mail)){authMsg('Revisá el email: falta algo, por ejemplo la @.');$('#au-mail').focus();return;}
+  if(pass.length<6){authMsg('La contraseña tiene que tener al menos 6 caracteres.');$('#au-pass').focus();return;}
+  authMsg('');authBusy(true);
+  (create?FB.signUp(name,mail,pass):FB.signIn(mail,pass)).catch(function(e){authMsg(fbError(e));authBusy(false);});
+}
+function doGoogle(){
+  authMsg('');authBusy(true);
+  FB.google().catch(function(e){if(e&&e.code!=='auth/popup-closed-by-user'&&e.code!=='auth/cancelled-popup-request')authMsg(fbError(e));authBusy(false);});
+}
+function doReset(){
+  var mail=$('#au-mail').value.trim();
+  if(!MAILRE.test(mail)){authMsg('Escribí tu email arriba y volvé a tocar "Olvidé mi contraseña".');$('#au-mail').focus();return;}
+  FB.reset(mail).then(function(){authMsg('Si el email tiene cuenta, te enviamos un mensaje para cambiar la contraseña. Revisá también el spam.');}).catch(function(e){authMsg(fbError(e));});
+}
+function normT(s){return String(s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9]+/g,' ').trim();}
+function badList(w){return String(w||S.badWords).split(',').map(normT).filter(Boolean);}
+function findBad(text,ws){var t=' '+normT(text)+' ',out=[];badList(ws).forEach(function(w){if(t.indexOf(' '+w+' ')>=0)out.push(w);});return out;}
+var ACCENT={a:'[aáàâä]',e:'[eéèêë]',i:'[iíìîï]',o:'[oóòôö]',u:'[uúùûü]',n:'[nñ]'};
+function maskBad(text,ws){
+  badList(ws).forEach(function(w){
+    var parts=w.split(' ').map(function(p){return p.split('').map(function(c){return ACCENT[c]||c;}).join('');});
+    var re;try{re=new RegExp('(?<![\\p{L}\\p{N}])'+parts.join('[^\\p{L}\\p{N}]+')+'(?![\\p{L}\\p{N}])','giu');}catch(e){return;}
+    text=text.replace(re,function(m){return m.replace(/[\p{L}\p{N}]/gu,'*');});
+  });
+  return text;
+}
+var VM={m:'texto'},REC={m:null},SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+function vnote(p,t){var n=$('#'+p+'-vnote');if(n)n.textContent=t;}
+function setMode(p,mode){
+  VM[p]=mode;stopRec(p);
+  $$('[data-act="mode"][data-p="'+p+'"]').forEach(function(b){b.setAttribute('aria-pressed',String(b.getAttribute('data-mode')===mode));});
+  $('#'+p+'-voice').hidden=(mode!=='voz');
+  if(mode==='voz')vnote(p,SR?'Apretá Grabar y hablá. Tu voz se convierte en texto y los demás leen la transcripción.':'Este navegador no convierte voz en texto. Usá Simular dictado para ver cómo se vería.');
+}
+function stopRec(p){
+  var r=REC[p];REC[p]=null;if(r){try{r.stop();}catch(e){}}
+  var c=$('#'+p+'-comp');if(c)c.classList.remove('rec-on');
+  var b=$('#'+p+'-rec');if(b)b.textContent='Grabar';
+}
+function toggleRec(p){
+  if(REC[p])return stopRec(p);
+  if(!SR)return vnote(p,'Este navegador no convierte voz en texto. Usá Simular dictado.');
+  var msg=$('#'+p+'-msg'),base=msg.value.trim()?msg.value.trim()+' ':'',r;
+  try{r=new SR();}catch(e){return vnote(p,'No se pudo iniciar el micrófono. Probá con Simular dictado.');}
+  r.lang='es-AR';r.continuous=true;r.interimResults=true;
+  r.onresult=function(ev){var t='';for(var i=0;i<ev.results.length;i++)t+=ev.results[i][0].transcript;msg.value=clampWords(base+t,S.maxWords);updateWc(p);onTyping(p);};
+  r.onerror=function(ev){if(REC[p]!==r)return;stopRec(p);vnote(p,(ev.error==='not-allowed'||ev.error==='service-not-allowed')?'El micrófono está bloqueado en esta vista. Probá con Simular dictado.':'No se pudo grabar ('+ev.error+'). Probá con Simular dictado.');};
+  r.onend=function(){if(REC[p]===r)stopRec(p);};
+  try{r.start();REC[p]=r;$('#'+p+'-comp').classList.add('rec-on');$('#'+p+'-rec').textContent='Detener';vnote(p,'Grabando…');}
+  catch(e){REC[p]=null;vnote(p,'No se pudo iniciar el micrófono. Probá con Simular dictado.');}
+}
+function simDictate(p){
+  var msg=$('#'+p+'-msg');if(msg.disabled)return;
+  var n=T?{topic:T.newsTopic}:NEWS[0];
+  msg.value=botText(n,Math.random()<0.5?'pro':'con',null);updateWc(p);onTyping(p);
+  vnote(p,'Dictado simulado: el texto es de ejemplo. Podés editarlo antes de enviar.');
+}
+function audioLabel(e){var s=Math.max(3,Math.round(e.words/2.3));return 'Audio · 0:'+String(s).padStart(2,'0')+' · con transcripción';}
+function extras(e){return (e.audio?'<span class="audio">'+audioLabel(e)+'</span>':'')+(e.flag?'<span class="flagtag">Lenguaje no permitido · se tapó</span>':'');}
+
+/* ---------- MESA (en tiempo real) ---------- */
+var selNews='e1';
+var TL=[],T=null,TID=null,OPS=[],BAL={},LASTGAIN=null;
+var unsubs={list:null,table:null,ops:null,bal:null},beatT=null;
+var phaseKey='',phaseLocalAt=0,graceMs=2500,tryAt=0,writeReq=-1,lobbyN=0;
+var TFIELDS=['players','round','queue','cur','phase','turnNo','status','expel','events','finishNote','hostUid','hostName'];
+var JOINERR={full:'La mesa se llenó.',started:'Esa mesa ya empezó. Podés mirarla.',gone:'Esa mesa ya no existe.',few:'Hacen falta al menos 2 personas para empezar.'};
+
+function pickT(t){var o={};TFIELDS.forEach(function(k){if(t[k]!==undefined)o[k]=t[k];});return o;}
+function pushEvent(t,text,cls){t.events=(t.events||[]).concat([{text:text,cls:cls||'',at:Date.now()}]).slice(-40);}
+function allIds(t){return Object.keys(t.players).sort(function(a,b){return (t.players[a].joinedAt||0)-(t.players[b].joinedAt||0);});}
+function activeIds(t){return allIds(t).filter(function(u){return t.players[u].active;});}
+function isPlayer(){return !!(T&&ACC&&T.players&&T.players[ACC.uid]);}
+function isActive(){return isPlayer()&&T.players[ACC.uid].active;}
+function tableAlive(t){
+  if(t.status==='finished')return false;
+  var m=0;Object.keys(t.players||{}).forEach(function(u){m=Math.max(m,t.players[u].seen||0);});
+  return m>now()-120000;
+}
+function finishNow(t,note){t.status='finished';t.phase='done';t.cur='';t.finishNote=note;t.turnNo=(t.turnNo||0)+1;}
+function advance(t){
+  while(true){
+    var act=activeIds(t);
+    if(act.length<2){finishNow(t,'Quedaron menos de dos disertantes en la mesa.');return t;}
+    while(t.queue.length){
+      var id=t.queue.shift();
+      if(t.players[id]&&t.players[id].active){t.cur=id;t.phase='wait';t.turnNo=(t.turnNo||0)+1;return t;}
+    }
+    t.round=(t.round||0)+1;
+    if(t.round>t.cfg.turns){finishNow(t,'Se completaron los '+t.cfg.turns+' turnos por disertante.');return t;}
+    t.queue=act.slice();
+  }
+}
+function requiredExpel(t,uid){
+  var v=activeIds(t).filter(function(u){return u!==uid;}).length;if(v<1)return 1;
+  if(t.cfg.expel==='one')return 1;
+  if(t.cfg.expel==='twothirds')return Math.ceil(v*2/3);
+  return Math.floor(v/2)+1;
+}
+function tallyOf(uid,ops){var f=0,a=0;(ops||OPS).forEach(function(o){if(o.uid===uid){f+=o.fav||0;a+=o.against||0;}});return {f:f,a:a};}
+function tableTx(mutate){
+  var ref=doc(db,'tables',TID);
+  return runTransaction(db,function(tx){
+    return tx.get(ref).then(function(s){
+      if(!s.exists())return false;
+      var t=s.data();
+      if(!mutate(t))return false;
+      tx.update(ref,pickT(t));return true;
+    });
+  });
+}
+function newPlayer(){return {name:ACC.name,level:levelOf(ME.points).n,joinedAt:Date.now(),active:true,turns:0,strikes:0,seen:Date.now()};}
+function cfgFromS(){return {startSec:S.startSec,endSec:S.endSec,maxWords:S.maxWords,turns:S.turns,expel:S.expel,againstSubtracts:!!S.againstSubtracts,badPenalty:S.badPenalty,badStrikes:S.badStrikes,badWords:String(S.badWords).slice(0,1500)};}
+
+/* lista de mesas abiertas */
+function listenTables(){
+  unlistenTables();
+  unsubs.list=onSnapshot(query(collection(db,'tables'),orderBy('createdAt','desc'),limit(30)),function(snap){
+    TL=snap.docs.map(function(d){var x=d.data();x.id=d.id;return x;});renderLobby();
+  },function(e){console.error(e);toast('No se pudieron cargar las mesas: '+fbError(e));});
+}
+function unlistenTables(){if(unsubs.list){unsubs.list();unsubs.list=null;}TL=[];}
+function lobbyCard(t){
+  var act=activeIds(t),inT=!!(ACC&&t.players[ACC.uid]&&t.players[ACC.uid].active),live=t.status==='live',free=act.length<t.maxSeats,btn;
+  if(inT)btn='<button class="btn" data-act="table-open" data-id="'+esc(t.id)+'">Volver a la mesa</button>';
+  else btn=(!live&&free?'<button class="btn" data-act="table-join" data-id="'+esc(t.id)+'">Sentarme</button>':'')+'<button class="btn ghost" data-act="table-open" data-id="'+esc(t.id)+'">Mirar</button>';
+  return '<article class="news"><div class="news-top"><span class="topic">'+esc(t.newsTopic)+'</span><span class="tag">'+(live?'En debate':'Esperando gente')+'</span></div>'+
+    '<h3>'+esc(t.newsTitle)+'</h3><div class="news-meta"><span><b>'+act.length+'</b> de '+t.maxSeats+' lugares ocupados</span><span>Abrió '+esc(t.hostName)+'</span></div>'+
+    '<div class="news-actions">'+btn+'</div></article>';
+}
+function renderLobby(){
+  var el=$('#lobby');
+  if(!authReady){el.innerHTML='<p class="empty">Conectando…</p>';return;}
+  if(!ACC){el.innerHTML='<div class="panel stack"><h3>Ingresá para sentarte a una mesa</h3><p class="hint">Las mesas son con personas reales. Necesitás una cuenta para abrir una, sentarte en una que esté abierta o votar las opiniones.</p><div class="result-actions"><button class="btn" data-act="auth-open">Ingresar o registrarme</button></div></div>';return;}
+  var list=TL.filter(tableAlive);
+  el.innerHTML='<h3 class="lobby-h">Mesas abiertas ahora</h3>'+(list.length?list.map(lobbyCard).join(''):'<p class="empty">No hay mesas abiertas en este momento. Elegí una noticia arriba y abrí la primera.</p>');
+}
+
+/* crear, sentarse, mirar, salir */
+function createTable(){
+  if(!authReady)return;
+  if(!ACC)return openAuth('mesa');
+  if(TID)return;
+  var n=newsById(selNews),pl={};pl[ACC.uid]=newPlayer();
+  $('#mesa-btn').disabled=true;
+  addDoc(collection(db,'tables'),{newsId:String(n.id),newsTitle:n.title,newsTopic:n.topic,hostUid:ACC.uid,hostName:ACC.name,status:'waiting',maxSeats:clamp(S.seats,2,8),cfg:cfgFromS(),players:pl,round:0,queue:[],cur:'',phase:'idle',turnNo:0,expel:{},events:[],finishNote:'',createdAt:serverTimestamp()})
+    .then(function(d){openTable(d.id);})
+    .catch(function(e){console.error(e);toast(fbError(e));})
+    .then(function(){$('#mesa-btn').disabled=false;});
+}
+function joinTable(id){
+  if(!ACC)return openAuth('mesa');
+  if(TID)return;
+  var ref=doc(db,'tables',id);
+  runTransaction(db,function(tx){return tx.get(ref).then(function(s){
+    if(!s.exists())throw {code:'gone'};
+    var t=s.data(),p=t.players[ACC.uid];
+    if(p){p.seen=Date.now();}
+    else{
+      if(t.status!=='waiting')throw {code:'started'};
+      Object.keys(t.players).forEach(function(u){if(u!==t.hostUid&&(t.players[u].seen||0)<Date.now()-60000)delete t.players[u];});
+      if(Object.keys(t.players).length>=t.maxSeats)throw {code:'full'};
+      t.players[ACC.uid]=newPlayer();
+      pushEvent(t,ACC.name+' se sentó a la mesa.');
+    }
+    tx.update(ref,pickT(t));
+  });}).then(function(){openTable(id);}).catch(function(e){console.error(e);toast(JOINERR[e&&e.code]||fbError(e));});
+}
+function openTable(id){
+  if(!ACC)return openAuth('mesa');
+  closeTable();
+  TID=id;T=null;OPS=[];BAL={};phaseKey='';LASTGAIN=null;writeReq=-1;
+  unsubs.table=onSnapshot(doc(db,'tables',id),onTableSnap,function(e){console.error(e);toast(fbError(e));});
+  unsubs.ops=onSnapshot(query(collection(db,'tables',id,'opinions'),orderBy('createdAt','asc')),function(snap){
+    OPS=snap.docs.map(function(d){var x=d.data();x.id=d.id;return x;});
+    if(T){renderLog();renderRoster();if(T.status==='finished')renderResult();}
+  },function(e){console.error(e);});
+  unsubs.bal=onSnapshot(doc(db,'tables',id,'ballots',ACC.uid),function(s){BAL=(s.exists()&&s.data().votes)||{};if(T)renderLog();},function(e){console.error(e);});
+  $('#lobby').hidden=true;$('#table-view').hidden=false;
+  clearInterval(beatT);beatT=setInterval(beat,20000);
+  renderMesaHead();
+}
+function closeTable(){
+  ['table','ops','bal'].forEach(function(k){if(unsubs[k]){unsubs[k]();unsubs[k]=null;}});
+  clearInterval(beatT);beatT=null;
+}
+function leaveLocal(){
+  closeTable();TID=null;T=null;OPS=[];BAL={};
+  $('#table-view').hidden=true;$('#lobby').hidden=false;$('#mesa-result').innerHTML='';
+}
+function leaveView(){leaveLocal();renderMesaHead();renderLobby();}
+function leaveTable(){
+  if(!TID)return Promise.resolve();
+  if(!isPlayer()){leaveView();return Promise.resolve();}
+  return tableTx(function(t){
+    var p=t.players[ACC.uid];if(!p)return false;
+    if(t.status==='waiting'){
+      delete t.players[ACC.uid];pushEvent(t,p.name+' salió de la mesa.');
+      var rest=activeIds(t);
+      if(!rest.length){finishNow(t,'La mesa se cerró.');}
+      else if(t.hostUid===ACC.uid){t.hostUid=rest[0];t.hostName=t.players[rest[0]].name;}
+      return true;
+    }
+    if(t.status==='live'&&p.active){
+      p.active=false;p.out='se fue de la mesa';pushEvent(t,p.name+' salió de la mesa.');
+      if(t.cur===ACC.uid)advance(t);else if(activeIds(t).length<2)finishNow(t,'Quedaron menos de dos disertantes en la mesa.');
+      return true;
+    }
+    return false;
+  }).catch(function(e){console.error(e);}).then(leaveView);
+}
+function startTable(){
+  if(!T||T.hostUid!==ACC.uid)return;
+  tableTx(function(t){
+    if(t.status!=='waiting'||t.hostUid!==ACC.uid)return false;
+    Object.keys(t.players).forEach(function(u){if(u!==ACC.uid&&(t.players[u].seen||0)<Date.now()-60000)delete t.players[u];});
+    var act=activeIds(t);
+    if(act.length<2)throw {code:'few'};
+    t.status='live';t.round=1;t.queue=act.slice();t.expel={};t.turnNo=1;
+    pushEvent(t,'Empieza el debate: '+t.cfg.turns+(t.cfg.turns===1?' turno':' turnos')+' por persona, '+t.cfg.startSec+' s para empezar y '+t.cfg.endSec+' s para terminar.');
+    advance(t);return true;
+  }).catch(function(e){console.error(e);toast(JOINERR[e&&e.code]||fbError(e));});
+}
+function beat(){
+  if(!T||!ACC||!isPlayer()||T.status==='finished'||!TID)return;
+  var o={};o['players.'+ACC.uid+'.seen']=Date.now();
+  updateDoc(doc(db,'tables',TID),o).catch(function(){});
+}
+
+/* cambios en la mesa que estoy mirando */
+function onTableSnap(snap){
+  if(!snap.exists()){toast('Esa mesa ya no existe.');leaveView();return;}
+  T=snap.data({serverTimestamps:'estimate'});
+  var key=T.status+':'+T.turnNo;
+  if(key!==phaseKey){
+    phaseKey=key;phaseLocalAt=now();graceMs=1800+Math.random()*2200;tryAt=0;
+    if(T.status==='live'&&ACC&&T.cur===ACC.uid&&T.phase==='wait'){var m=$('#m-msg');m.value='';updateWc('m');setTimeout(function(){if(!m.disabled)m.focus();},80);}
+    if(T.status==='finished')afterFinish();
+  }
+  renderMesaHead();renderTableView();
+}
+function renderTableView(){
+  if(!T)return;
+  drawTable();renderRoster();renderLog();renderWait();updateLive();
+  if(T.status==='finished')renderResult();else $('#mesa-result').innerHTML='';
+}
+function renderMesaHead(){
+  var b=$('#mesa-btn'),lab=$('#mesa-news').parentNode,inT=!!TID&&!!T;
+  if(inT){
+    b.textContent=T.status==='finished'?'Volver a las mesas':(isActive()?'Salir de la mesa':'Dejar de mirar');
+    b.setAttribute('data-act','table-leave');
+  }else{
+    b.textContent=ACC?'Abrir una mesa nueva':'Ingresar para sentarme';
+    b.setAttribute('data-act',ACC?'table-create':'auth-open');
+  }
+  lab.hidden=inT;
+  $('#mesa-sub').textContent=inT?('Se debate: '+T.newsTitle):'Abrí una mesa sobre una noticia o sentate en una que ya esté abierta. Hablan por turnos, el público vota cada opinión y la mesa puede expulsar a quien se salga del tema.';
+}
+function renderWait(){
+  var w=$('#m-wait'),h=$('#m-host');
+  var waiting=T.status==='waiting',live=T.status==='live';
+  w.hidden=!waiting;h.hidden=!live;
+  if(!waiting)return;
+  var act=activeIds(T),host=ACC&&T.hostUid===ACC.uid,pl=isPlayer(),free=act.length<T.maxSeats,h2='<h3>Sala de espera</h3><p>Hay <b>'+act.length+' de '+T.maxSeats+'</b> lugares ocupados. Con 2 personas ya se puede empezar.</p>';
+  if(host)h2+='<div class="result-actions"><button class="btn" data-act="table-start"'+(act.length<2?' disabled':'')+'>Empezar el debate</button></div>'+(act.length<2?'<p class="hint">Falta al menos una persona más. Pasale la dirección de la página a quien quieras que se siente.</p>':'');
+  else if(pl)h2+='<p>Esperando que '+esc(T.hostName)+' empiece el debate.</p>';
+  else h2+=free?'<div class="result-actions"><button class="btn" data-act="table-join" data-id="'+esc(TID)+'">Sentarme</button></div>':'<p>La mesa está completa. Podés mirarla.</p>';
+  w.innerHTML=h2;
+}
+
+/* dibujo de la mesa */
+function drawTable(){
+  var svg=$('#tbl'),n=clamp(T.maxSeats,2,8),ids=allIds(T),cx=320,cy=320,R0=200,A=R0*Math.cos(Math.PI/n),SD=A+52,SR=36;
+  var poly=[];for(var k=0;k<n;k++){var a=k*2*Math.PI/n+Math.PI/n;poly.push((cx+R0*Math.cos(a)).toFixed(1)+','+(cy+R0*Math.sin(a)).toFixed(1));}
+  var h='<defs><radialGradient id="felt" cx="50%" cy="50%" r="60%"><stop offset="0" stop-color="var(--felt-hi)"/><stop offset="1" stop-color="var(--felt)"/></radialGradient></defs>';
+  h+='<polygon class="rim" points="'+poly.join(' ')+'" fill="url(#felt)"/>';
+  if(n>=5){
+    [0,1,2].forEach(function(i){var o=86+i*22,hh=56+i*22;
+      h+='<path class="wave" d="M '+(cx-o)+' '+(cy-hh)+' Q '+(cx-o-hh*0.55)+' '+cy+' '+(cx-o)+' '+(cy+hh)+'"/>';
+      h+='<path class="wave" d="M '+(cx+o)+' '+(cy-hh)+' Q '+(cx+o+hh*0.55)+' '+cy+' '+(cx+o)+' '+(cy+hh)+'"/>';});
+  }
+  h+='<circle cx="'+cx+'" cy="'+cy+'" r="68" fill="rgba(255,255,255,.13)"/>';
+  h+='<text class="on-felt" id="ctr-name" x="'+cx+'" y="'+(cy-24)+'" font-family="var(--font-display)" font-weight="600" font-size="17"></text>';
+  h+='<text class="on-felt" id="ctr-time" x="'+cx+'" y="'+(cy+16)+'" font-family="var(--font-mono)" font-weight="600" font-size="38"></text>';
+  h+='<text class="on-felt" id="ctr-cap" x="'+cx+'" y="'+(cy+40)+'" font-family="var(--font-body)" font-size="13"></text>';
+  for(var i=0;i<n;i++){
+    var ang=i*2*Math.PI/n,x=cx+SD*Math.cos(ang),y=cy+SD*Math.sin(ang),u=ids[i],p=u?T.players[u]:null;
+    var speaking=!!p&&T.status==='live'&&T.cur===u&&(T.phase==='wait'||T.phase==='write');
+    var cls='seat'+(speaking?' speaking':'')+(p&&!p.active?' out':'')+(ACC&&u===ACC.uid?' me':'')+(!p?' empty':'');
+    var name=p?p.name:'Libre',ini=p?p.name.charAt(0):'';
+    var ly=Math.sin(ang)<-0.55?y-SR-10:y+SR+20;
+    h+='<g class="'+cls+'"><title>'+esc(name)+'</title>'+(speaking?'<circle class="pulse" cx="'+x.toFixed(1)+'" cy="'+y.toFixed(1)+'" r="'+SR+'"/>':'')+
+       '<circle class="body" cx="'+x.toFixed(1)+'" cy="'+y.toFixed(1)+'" r="'+SR+'"/><text class="ini" x="'+x.toFixed(1)+'" y="'+y.toFixed(1)+'">'+esc(ini)+'</text>'+
+       '<text class="nm" x="'+x.toFixed(1)+'" y="'+ly.toFixed(1)+'">'+esc(name)+'</text></g>';
+  }
+  svg.innerHTML=h;
+}
+function renderRoster(){
+  var el=$('#roster');if(!T){el.innerHTML='';return;}
+  var af=document.activeElement,fk=af&&af.getAttribute&&af.getAttribute('data-act')==='expel'?af.getAttribute('data-k'):null;
+  el.innerHTML='<h3>En la mesa</h3><ul>'+allIds(T).map(function(u){
+    var p=T.players[u],t=tallyOf(u),isMe=ACC&&u===ACC.uid,can=T.status==='live'&&isActive()&&!isMe&&p.active;
+    var ev=((T.expel&&T.expel[u])||[]).filter(function(x){return T.players[x]&&T.players[x].active;});
+    return '<li class="'+(p.active?'':'out')+'"><span class="av">'+esc(p.name.charAt(0))+'</span><div class="who"><b>'+esc(p.name)+(isMe?'<i class="you">vos</i>':'')+(u===T.hostUid&&T.status==='waiting'?'<i class="you">anfitrión</i>':'')+'</b><span>Nivel '+(p.level||1)+' · '+(p.turns||0)+((p.turns||0)===1?' turno':' turnos')+'</span></div>'+
+      '<span class="votes" title="Votos a favor y en contra"><span class="f">+'+t.f+'</span> <span class="a">−'+t.a+'</span></span>'+
+      (can?'<button class="mini" data-act="expel" data-k="'+esc(u)+'" aria-pressed="'+(ev.indexOf(ACC.uid)>=0)+'" title="Pedir que se lo expulse de la mesa">Expulsar '+ev.length+'/'+requiredExpel(T,u)+'</button>':(!p.active?'<span class="chip">Fuera</span>':''))+'</li>';
+  }).join('')+'</ul>';
+  if(fk){var b=el.querySelector('[data-act="expel"][data-k="'+fk+'"]');if(b)b.focus();}
+}
+function opHTML(o){
+  var mine=!!ACC&&o.uid===ACC.uid,my=BAL[o.id]||null,words=(T&&T.cfg&&T.cfg.badWords)||S.badWords;
+  return '<article class="op'+(mine?' mine':'')+(o.flag?' flag':'')+'"><header><span class="av">'+esc(String(o.name||'?').charAt(0))+'</span><b>'+esc(o.name||'')+(mine?' <span class="meta">(vos)</span>':'')+'</b><span class="meta">'+(o.words||0)+' palabras</span></header><p>'+esc(maskBad(String(o.text||''),words))+'</p>'+extras(o)+
+    '<div class="vote-row"><button class="vote f" data-act="vote" data-id="'+esc(o.id)+'" data-dir="f" aria-pressed="'+(my==='f')+'"'+(mine?' disabled':'')+'>A favor <b>'+(o.fav||0)+'</b></button>'+
+    '<button class="vote a" data-act="vote" data-id="'+esc(o.id)+'" data-dir="a" aria-pressed="'+(my==='a')+'"'+(mine?' disabled':'')+'>En contra <b>'+(o.against||0)+'</b></button></div></article>';
+}
+function renderLog(){
+  var el=$('#log');if(!T){el.innerHTML='';return;}
+  var items=OPS.map(function(o){return {at:o.at||0,html:opHTML(o)};}).concat((T.events||[]).map(function(e){return {at:e.at||0,html:'<div class="sys '+esc(e.cls||'')+'">'+esc(e.text)+'</div>'};}));
+  items.sort(function(a,b){return b.at-a.at;});
+  var st=el.scrollTop;
+  el.innerHTML=items.length?items.map(function(i){return i.html;}).join(''):'<p class="empty">Todavía nadie habló.</p>';
+  el.scrollTop=st;
+}
+function updateLive(){
+  if(!T)return;
+  var nm=$('#ctr-name'),tm=$('#ctr-time'),cp=$('#ctr-cap'),svg=$('#tbl');if(!nm)return;
+  if(T.status==='waiting'){nm.textContent='Sala de espera';tm.textContent=String(activeIds(T).length);cp.textContent='personas sentadas';return;}
+  if(T.status==='finished'){nm.textContent='Fin del debate';tm.textContent='';cp.textContent='';svg.classList.remove('talking');return;}
+  var me=isPlayer()?T.players[ACC.uid]:null,cur=T.players[T.cur],mine=!!me&&me.active&&T.cur===ACC.uid,ph=T.phase;
+  var dur=(ph==='wait'?T.cfg.startSec:T.cfg.endSec),rem=Math.max(0,(phaseLocalAt+dur*1000-now())/1000),info,cap,cn=cur?cur.name:'';
+  svg.classList.toggle('talking',ph==='write');
+  if(!me){info='Estás mirando la mesa. Podés votar las opiniones.';cap='Habla '+cn;}
+  else if(!me.active){info='Saliste de la mesa. Podés seguir mirando y votando.';cap='Habla '+cn;}
+  else if(mine){info='Es tu turno';cap=ph==='wait'?'para empezar a escribir':'para terminar tu opinión';}
+  else{
+    var pos=T.queue.indexOf(ACC.uid)+1;
+    info='Habla '+cn+'. '+(pos===1?'Sos el próximo.':pos>1?'Tu turno llega en '+pos+' turnos.':'Ya hablaste en esta ronda.');
+    cap=ph==='wait'?cn+' está por empezar':cn+' está escribiendo';
+  }
+  setComposer('m',{mine:mine,phase:ph,info:info,cd:Math.ceil(rem)+' s',cap:cap,pct:dur?rem/dur*100:0,low:rem<=5});
+  nm.textContent=cn;tm.textContent=String(Math.ceil(rem));cp.textContent=ph==='wait'?'para empezar':'para terminar';
+}
+
+/* reloj: cada persona avisa cuando se vence un turno */
+function tableTick(){
+  if(!T||!ACC)return;
+  updateLive();
+  if(T.status!=='live'||!isPlayer())return;
+  var dur=(T.phase==='wait'?T.cfg.startSec:T.cfg.endSec)*1000;
+  if(now()>phaseLocalAt+dur+graceMs&&now()>tryAt+7000){tryAt=now();expireTurn(T.turnNo);}
+}
+function expireTurn(no){
+  tableTx(function(t){
+    if(t.status!=='live'||t.turnNo!==no)return false;
+    var p=t.players[t.cur];if(!p)return false;
+    var why=t.phase==='wait'?'no empezó a hablar en '+t.cfg.startSec+' s':'no terminó su opinión en '+t.cfg.endSec+' s';
+    p.active=false;p.out=why;pushEvent(t,p.name+' salió de la mesa: '+why+'.');advance(t);return true;
+  }).catch(function(e){console.error(e);});
+}
+
+/* escribir, enviar, votar, expulsar */
+function onTyping(p){
+  if(p!=='m'||!T||!ACC||T.status!=='live'||T.cur!==ACC.uid||T.phase!=='wait'||!$('#m-msg').value.trim())return;
+  if(writeReq===T.turnNo)return;writeReq=T.turnNo;
+  var no=T.turnNo;
+  tableTx(function(t){
+    if(t.status!=='live'||t.cur!==ACC.uid||t.phase!=='wait'||t.turnNo!==no)return false;
+    t.phase='write';t.turnNo++;return true;
+  }).catch(function(e){console.error(e);writeReq=-1;});
+}
+function sendMsg(p){
+  var raw=$('#m-msg').value.trim();
+  if(!raw||!T||!ACC||T.status!=='live'||T.cur!==ACC.uid)return;
+  var cfg=T.cfg,bad=findBad(raw,cfg.badWords).length>0,text=clampWords(bad?maskBad(raw,cfg.badWords):raw,cfg.maxWords),audio=VM.m==='voz';
+  stopRec('m');
+  var ref=doc(db,'tables',TID),opRef=doc(collection(db,'tables',TID,'opinions'));
+  $('#m-send').disabled=true;
+  runTransaction(db,function(tx){return tx.get(ref).then(function(s){
+    var t=s.data();
+    if(!(t.status==='live'&&t.cur===ACC.uid&&(t.phase==='wait'||t.phase==='write')))throw {code:'not-your-turn'};
+    var pl=t.players[ACC.uid];pl.turns=(pl.turns||0)+1;
+    tx.set(opRef,{uid:ACC.uid,name:ACC.name,text:text,words:wc(text),audio:audio,flag:bad,fav:0,against:0,turnNo:t.turnNo,at:Date.now(),createdAt:serverTimestamp()});
+    if(bad){
+      pl.strikes=(pl.strikes||0)+1;
+      pushEvent(t,'Lenguaje no permitido de '+pl.name+': '+t.cfg.badPenalty+' puntos menos (aviso '+pl.strikes+' de '+t.cfg.badStrikes+').','golpe');
+      if(pl.strikes>=t.cfg.badStrikes){pl.active=false;pl.out='acumuló '+t.cfg.badStrikes+' avisos por lenguaje no permitido';pushEvent(t,pl.name+' salió de la mesa: '+pl.out+'.');}
+    }
+    advance(t);tx.update(ref,pickT(t));
+  });}).then(function(){
+    $('#m-msg').value='';updateWc('m');
+    if(bad){var lost=Math.min(ME.points,cfg.badPenalty);if(lost){ME.points-=lost;FB.addPoints(-lost);renderMe();}toast('Lenguaje no permitido: se tapó tu texto y se restaron '+lost+' puntos.');}
+  }).catch(function(e){console.error(e);toast(e&&e.code==='not-your-turn'?'Ya no era tu turno.':fbError(e));});
+}
+function voteOp(opId,dir){
+  if(!T||!ACC)return;
+  var o=OPS.filter(function(x){return x.id===opId;})[0];if(!o||o.uid===ACC.uid)return;
+  var opRef=doc(db,'tables',TID,'opinions',opId),balRef=doc(db,'tables',TID,'ballots',ACC.uid);
+  runTransaction(db,function(tx){return tx.get(balRef).then(function(bs){
+    var votes=(bs.exists()&&bs.data().votes)||{},cur=votes[opId]||null,next=(cur===dir)?null:dir;
+    var df=(next==='f'?1:0)-(cur==='f'?1:0),da=(next==='a'?1:0)-(cur==='a'?1:0);
+    if(next)votes[opId]=next;else delete votes[opId];
+    tx.set(balRef,{votes:votes});
+    tx.update(opRef,{fav:increment(df),against:increment(da)});
+  });}).catch(function(e){console.error(e);toast('No se pudo registrar tu voto: '+fbError(e));});
+}
+function toggleExpel(uid){
+  if(!T||T.status!=='live'||!isActive()||uid===ACC.uid)return;
+  tableTx(function(t){
+    var p=t.players[uid];if(t.status!=='live'||!p||!p.active)return false;
+    t.expel=t.expel||{};
+    var a=(t.expel[uid]||[]).filter(function(x){return t.players[x]&&t.players[x].active;}),i=a.indexOf(ACC.uid);
+    if(i>=0)a.splice(i,1);else a.push(ACC.uid);
+    t.expel[uid]=a;
+    if(a.length>=requiredExpel(t,uid)){
+      p.active=false;p.out='la mesa votó su expulsión';delete t.expel[uid];
+      pushEvent(t,p.name+' salió de la mesa: la mesa votó su expulsión.');
+      if(t.cur===uid)advance(t);else if(activeIds(t).length<2)finishNow(t,'Quedaron menos de dos disertantes en la mesa.');
+    }
+    return true;
+  }).catch(function(e){console.error(e);});
+}
+
+/* fin del debate: puntos y resultados */
+function afterFinish(){
+  if(!isPlayer())return;
+  setTimeout(function(){
+    if(!T||T.status!=='finished'||!isPlayer())return;
+    var Tn=T,ops=OPS.slice();
+    tableTx(function(t){var p=t.players[ACC.uid];if(!p||p.paid)return false;p.paid=true;return true;}).then(function(changed){
+      if(!changed)return;
+      var p=Tn.players[ACC.uid],tt=tallyOf(ACC.uid,ops),before=levelOf(ME.points);
+      var gain=p.turns>0?Math.max(0,5*p.turns+tt.f-(Tn.cfg.againstSubtracts?tt.a:0)):0;
+      LASTGAIN={gain:gain,f:tt.f,a:tt.a,turns:p.turns};
+      ME.points+=gain;FB.addPoints(gain);renderMe();
+      if(T===Tn||(T&&T.status==='finished'))renderResult();
+      var after=levelOf(ME.points);
+      if(after.n>before.n)toast('Subiste al nivel '+after.n+': '+after.name+'. Ya podés publicar una noticia más.');
+    }).catch(function(e){console.error(e);});
+  },3500);
+}
+function renderResult(){
+  if(!T||T.status!=='finished')return;
+  var rows=allIds(T).map(function(u){var p=T.players[u],x=tallyOf(u);return {u:u,p:p,f:x.f,a:x.a,net:x.f-x.a};}).sort(function(x,y){return y.net-x.net||y.f-x.f;});
+  var top=rows.filter(function(r){return r.p.turns>0;})[0],meP=isPlayer()?T.players[ACC.uid]:null,pts;
+  if(!meP)pts='Mirabas la mesa, así que no sumás puntos.';
+  else if(LASTGAIN)pts=LASTGAIN.turns>0?'Sumaste <b>'+LASTGAIN.gain+' puntos</b>: 5 por cada turno ('+LASTGAIN.turns+') más '+LASTGAIN.f+' votos a favor'+(T.cfg.againstSubtracts?', menos '+LASTGAIN.a+' en contra':'. Tus '+LASTGAIN.a+' votos en contra no restan puntos')+'.':'No llegaste a opinar, así que esta mesa no suma puntos.';
+  else if(meP.paid)pts='Los puntos de esta mesa ya se sumaron a tu cuenta.';
+  else pts='Calculando tus puntos…';
+  var lv=levelOf(ME.points);
+  $('#mesa-result').innerHTML='<div class="panel result"><h3>'+(top?'Mejor argumento: '+esc(top.p.name)+' ('+(top.net>0?'+':'')+top.net+')':'Nadie alcanzó a opinar')+'</h3>'+
+    '<p class="hint">'+esc(T.finishNote||'')+'</p>'+
+    '<div class="tw"><table><thead><tr><th>Disertante</th><th>Turnos</th><th>A favor</th><th>En contra</th><th>Neto</th><th>Estado</th></tr></thead><tbody>'+
+    rows.map(function(r){return '<tr class="'+(ACC&&r.u===ACC.uid?'me':'')+'"><td>'+esc(r.p.name)+'</td><td>'+(r.p.turns||0)+'</td><td>+'+r.f+'</td><td>−'+r.a+'</td><td>'+(r.net>0?'+':'')+r.net+'</td><td>'+(r.p.active?'Hasta el final':esc(r.p.out||'Fuera'))+'</td></tr>';}).join('')+
+    '</tbody></table></div><p>'+pts+(meP?' Ahora estás en el nivel '+lv.n+' ('+lv.name+') con '+ME.points+' puntos.':'')+'</p>'+
+    '<div class="result-actions"><button class="btn" data-act="table-leave">Volver a las mesas</button><button class="btn ghost" data-act="go" data-v="noticias">Ver más noticias</button></div></div>';
+}
+
+/* ---------- Reglas ---------- */
+var FIELDS=[
+ ['Mesa de debate',[
+  {k:'seats',l:'Asientos por mesa',min:3,max:8,u:'disertantes'},
+  {k:'maxWords',l:'Palabras por opinión',min:10,max:300,u:'palabras'},
+  {k:'startSec',l:'Tiempo para empezar a opinar',min:3,max:60,u:'segundos'},
+  {k:'endSec',l:'Tiempo para terminar la opinión',min:10,max:180,u:'segundos'},
+  {k:'turns',l:'Turnos por disertante',min:1,max:5,u:'turnos'},
+  {k:'expel',l:'Para expulsar a alguien hace falta',type:'select',opts:[['majority','La mayoría de la mesa'],['twothirds','Dos tercios de la mesa'],['one','Un solo voto']]},
+  {k:'againstSubtracts',l:'Los votos en contra restan puntos',type:'check'}]],
+ ['Convivencia',[
+  {k:'badPenalty',l:'Puntos que resta cada mala palabra',min:0,max:50,u:'puntos'},
+  {k:'badStrikes',l:'Avisos antes de la expulsión de la mesa',min:1,max:5,u:'avisos'},
+  {k:'badWords',l:'Palabras no permitidas',type:'area'}]]
+];
+var FM={};FIELDS.forEach(function(g){g[1].forEach(function(f){FM[f.k]=f;});});
+function renderRules(){
+  $('#rules').innerHTML=FIELDS.map(function(g){
+    return '<div class="panel"><h3>'+g[0]+'</h3>'+g[1].map(function(f){
+      var id='set-'+f.k;
+      if(f.type==='area')return '<div class="field sel"><label for="'+id+'">'+f.l+'<small>separadas por coma</small></label><textarea id="'+id+'" rows="5" data-k="'+f.k+'">'+esc(S[f.k])+'</textarea></div>';
+      if(f.type==='check')return '<div class="field chk"><label for="'+id+'">'+f.l+'</label><input type="checkbox" id="'+id+'" data-k="'+f.k+'"'+(S[f.k]?' checked':'')+'></div>';
+      if(f.type==='select')return '<div class="field sel"><label for="'+id+'">'+f.l+'</label><select id="'+id+'" data-k="'+f.k+'">'+f.opts.map(function(o){return '<option value="'+o[0]+'"'+(String(S[f.k])===o[0]?' selected':'')+'>'+o[1]+'</option>';}).join('')+'</select></div>';
+      return '<div class="field"><label for="'+id+'">'+f.l+'<small>'+f.u+'</small></label><input type="number" id="'+id+'" data-k="'+f.k+'" min="'+f.min+'" max="'+f.max+'" value="'+S[f.k]+'"></div>';
+    }).join('')+'</div>';
+  }).join('');
+  renderRateNote();
+}
+function renderRateNote(){
+  var w=Math.round(S.endSec/60*40);
+  $('#rate-note').innerHTML='Con '+S.endSec+' segundos para terminar, una persona que escribe a unas 40 palabras por minuto llega a unas <b>'+w+' palabras</b>, y el límite es '+S.maxWords+'. Hablando, ese mismo tiempo alcanza para unas '+Math.round(S.endSec/60*140)+'.';
+}
+$('#rules').addEventListener('change',function(ev){
+  var el=ev.target,k=el.getAttribute('data-k');if(!k)return;var f=FM[k];
+  if(f.type==='check')S[k]=el.checked;
+  else if(f.type==='area')S[k]=el.value;
+  else if(f.type==='select')S[k]=typeof DEFAULTS[k]==='number'?+el.value:el.value;
+  else{var v=parseInt(el.value,10);if(isNaN(v))v=DEFAULTS[k];S[k]=clamp(v,f.min,f.max);el.value=S[k];}
+  save();renderRateNote();updateWc('m');
+});
+
+/* ---------- Eventos globales ---------- */
+document.addEventListener('click',function(ev){
+  var el=ev.target.closest('[data-act]');if(!el)return;
+  var act=el.getAttribute('data-act'),sid=el.getAttribute('data-id'),id=+sid;
+  if(act==='visit'){var n=newsById(sid);if(n.example){n.visits++;var v=$('#vis-'+sid);if(v)v.textContent=n.visits;}else FB.visit(sid);return;}
+  if(act==='filter'){filter=el.getAttribute('data-t');renderChips();renderFeed();}
+  else if(act==='debate'){if(!TID){selNews=sid;$('#mesa-news').value=sid;}go('mesa');}
+  else if(act==='go')go(el.getAttribute('data-v'));
+  else if(act==='table-create')createTable();
+  else if(act==='table-join')joinTable(sid);
+  else if(act==='table-open')openTable(sid);
+  else if(act==='table-start')startTable();
+  else if(act==='table-leave')leaveTable();
+  else if(act==='vote')voteOp(sid,el.getAttribute('data-dir'));
+  else if(act==='expel')toggleExpel(el.getAttribute('data-k'));
+  else if(act==='send')sendMsg(el.getAttribute('data-p'));
+  else if(act==='auth-open')openAuth(null);
+  else if(act==='auth-close')closeAuth();
+  else if(act==='auth-google')doGoogle();
+  else if(act==='auth-mode'){authMode=el.getAttribute('data-mode');renderAuth();var fi=$('#au-name')||$('#au-mail');if(fi)fi.focus();}
+  else if(act==='auth-reset')doReset();
+  else if(act==='logout'){Promise.resolve(TID?leaveTable():null).then(function(){return FB.out();}).then(function(){toast('Saliste de tu cuenta.');});}
+  else if(act==='mode')setMode(el.getAttribute('data-p'),el.getAttribute('data-mode'));
+  else if(act==='rec')toggleRec(el.getAttribute('data-p'));
+  else if(act==='sim')simDictate(el.getAttribute('data-p'));
+  else if(act==='rules-default'){Object.assign(S,DEFAULTS);save();renderRules();renderTable();toast('Volvieron los valores del planteo original.');}
+});
+document.addEventListener('input',function(ev){
+  var t=ev.target;
+  if(t.id==='m-msg'){var p=t.id.charAt(0);t.value=clampWords(t.value,S.maxWords);updateWc(p);onTyping(p);}
+});
+document.addEventListener('keydown',function(ev){
+  var t=ev.target;
+  if((t.id==='m-msg')&&ev.key==='Enter'&&(ev.ctrlKey||ev.metaKey)){ev.preventDefault();sendMsg(t.id.charAt(0));}
+});
+$('#mesa-news').addEventListener('change',function(){selNews=this.value;});
+document.addEventListener('submit',function(ev){if(ev.target.id==='auth-form'){ev.preventDefault();doEmail();}});
+$('#auth').addEventListener('click',function(ev){if(ev.target===this)closeAuth();});
+document.addEventListener('keydown',function(ev){if(ev.key==='Escape'&&!$('#auth').hidden)closeAuth();});
+
+/* ---------- Firebase ---------- */
+var firebaseConfig={
+    apiKey: "AIzaSyCSg_rxglgPEtxyvw9ukxnZlfKiWuJ_uiY",
+    authDomain: "speakertopic.firebaseapp.com",
+    projectId: "speakertopic",
+    storageBucket: "speakertopic.firebasestorage.app",
+    messagingSenderId: "165355461451",
+    appId: "1:165355461451:web:1ea6c4416c8b4800a426ce"
+  };
+var fbApp,auth,db,fbOk=false;
+try{fbApp=initializeApp(firebaseConfig);auth=getAuth(fbApp);db=getFirestore(fbApp);fbOk=true;}catch(e){console.error(e);}
+var pendingName=null;
+var FBERR={
+  'auth/email-already-in-use':'Ese email ya tiene una cuenta. Tocá "Ya tengo cuenta" para ingresar.',
+  'auth/invalid-email':'El email no es válido.',
+  'auth/weak-password':'La contraseña es muy débil. Usá al menos 6 caracteres.',
+  'auth/invalid-credential':'Email o contraseña incorrectos.',
+  'auth/wrong-password':'Email o contraseña incorrectos.',
+  'auth/user-not-found':'Email o contraseña incorrectos.',
+  'auth/too-many-requests':'Demasiados intentos. Esperá unos minutos y probá de nuevo.',
+  'auth/network-request-failed':'No hay conexión con Firebase. Revisá tu internet.',
+  'auth/popup-blocked':'El navegador bloqueó la ventana de Google. Permití ventanas emergentes para este sitio.',
+  'auth/unauthorized-domain':'Esta dirección no está autorizada en Firebase (Authentication, Configuración, Dominios autorizados).',
+  'auth/operation-not-allowed':'Ese método de ingreso no está activado en Firebase (Authentication, Método de acceso).',
+  'permission-denied':'Firebase rechazó la operación. Revisá que las reglas de Firestore estén publicadas.',
+  'unavailable':'Firebase no responde. Probá de nuevo en un momento.'
+};
+function fbError(e){var c=((e&&e.code)||'').replace(/^firestore\//,'');return FBERR[c]||'Algo salió mal ('+(c||(e&&e.message)||'error')+'). Probá de nuevo.';}
+var FB={
+  google:function(){return signInWithPopup(auth,new GoogleAuthProvider());},
+  signUp:function(name,mail,pass){
+    pendingName=name;
+    return createUserWithEmailAndPassword(auth,mail,pass).then(function(c){return updateProfile(c.user,{displayName:name}).catch(function(){});}).catch(function(e){pendingName=null;throw e;});
+  },
+  signIn:function(mail,pass){return signInWithEmailAndPassword(auth,mail,pass);},
+  reset:function(mail){return sendPasswordResetEmail(auth,mail);},
+  out:function(){return signOut(auth);},
+  addPoints:function(d){
+    if(!ACC||!d)return;
+    return updateDoc(doc(db,'users',ACC.uid),{points:increment(d)}).catch(function(e){console.error(e);toast('No se pudieron guardar tus puntos: '+fbError(e));});
+  },
+  addNews:function(n){
+    return addDoc(collection(db,'news'),{topic:n.topic,title:n.title,lede:n.lede,url:n.url,author:ACC.name,authorUid:ACC.uid,visits:0,createdAt:serverTimestamp()}).then(function(){
+      var t=today(),cnt=postsToday()+1;
+      ME.postDay=t;ME.postsToday=cnt;renderQuota();
+      return updateDoc(doc(db,'users',ACC.uid),{postDay:t,postsToday:cnt}).catch(function(e){console.error(e);});
+    });
+  },
+  visit:function(id){updateDoc(doc(db,'news',id),{visits:increment(1)}).catch(function(e){console.error(e);});}
+};
+function ensureProfile(user){
+  var ref=doc(db,'users',user.uid);
+  return getDoc(ref).then(function(snap){
+    if(snap.exists())return snap.data();
+    var name=String(pendingName||user.displayName||'').trim().slice(0,20);
+    if(name.length<2||findBad(name).length)name='Usuario'+Math.floor(rnd(100,999));
+    var p={name:name,points:0,postDay:'',postsToday:0,createdAt:serverTimestamp()};
+    return setDoc(ref,p).then(function(){return {name:name,points:0,postDay:'',postsToday:0};});
+  });
+}
+function onUser(user){
+  if(!user){ACC=null;ME.points=0;ME.postDay='';ME.postsToday=0;authReady=true;leaveLocal();unlistenTables();renderMe();renderLobby();return;}
+  ensureProfile(user).then(function(p){
+    var g=(user.providerData||[]).some(function(x){return x&&x.providerId==='google.com';});
+    ACC={uid:user.uid,name:p.name,provider:g?'Google':'email'};
+    ME.points=+p.points||0;ME.postDay=p.postDay||'';ME.postsToday=+p.postsToday||0;
+    pendingName=null;authReady=true;
+    var open=!$('#auth').hidden,next=authNext;
+    renderMe();listenTables();renderLobby();
+    if(open){closeAuth();toast('Listo, '+ACC.name+'. Ya estás adentro.');if(next==='mesa')go('mesa');}
+  }).catch(function(e){
+    console.error(e);authReady=true;ACC=null;renderMe();
+    if(!$('#auth').hidden){authMsg(fbError(e));authBusy(false);}else toast(fbError(e));
+    signOut(auth).catch(function(){});
+  });
+}
+function listenNews(){
+  onSnapshot(query(collection(db,'news'),orderBy('createdAt','desc'),limit(60)),function(snap){
+    REAL=snap.docs.map(function(d){var x=d.data();return {id:d.id,topic:String(x.topic||''),title:String(x.title||''),lede:String(x.lede||''),url:String(x.url||''),author:String(x.author||'Anónimo'),visits:+x.visits||0};});
+    NEWS.splice(0,NEWS.length);REAL.concat(EXAMPLES).forEach(function(n){NEWS.push(n);});
+    renderFeed();renderMesaSelect();
+  },function(e){console.error(e);toast('No se pudieron cargar las noticias compartidas: '+fbError(e));});
+}
+
+/* ---------- Arranque ---------- */
+load();
+$('#m-host').innerHTML=composerHTML('m','');
+$('#pf-topic').innerHTML=TOPICS.map(function(t){return '<option>'+t+'</option>';}).join('');
+renderMe();renderChips();renderFeed();renderMesaSelect();renderRules();
+renderLobby();updateWc('m');
+if(fbOk){onAuthStateChanged(auth,onUser);listenNews();}else{authReady=true;renderMe();toast('No se pudo conectar con Firebase.');}
+setInterval(function(){tableTick();if(++lobbyN%40===0&&!$('#lobby').hidden)renderLobby();},250);
+show(location.hash.slice(1));
+})();
+</script>
+</body>
+</html>
+
+   
+   
